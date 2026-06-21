@@ -38,6 +38,7 @@ let state = {
   taskDone:[true,false,false],
   rStatus:'idle', rIndex:0, rCode:null, rRan:false, rRunning:false, rOutput:[], rImages:[], rEnv:[], showHint:false, showModel:false,
   aiRQuestions:[], aiGenerating:false, aiGenError:'', showKeyModal:false,
+  paQStartTime:null, paQDuration:0, paPreview:false,
   selected:null,
   planEdit:false, planData:null, examDate:'2026-09-22', dailyGoal:45,
   addingTo:null, addMod:'CM1A', addType:'Flashcards', chipDone:{},
@@ -69,10 +70,30 @@ function loadMastery(){
 let mastery=loadMastery();
 function saveMastery(){localStorage.setItem('tabula_mastery_v1',JSON.stringify(mastery));}
 function recordCardRating(subId, rating){
-  if(!mastery[subId])mastery[subId]={seen:0,good:0,lastSeen:''};
-  mastery[subId].seen++;
-  if(rating==='good'||rating==='easy'||rating==='Good'||rating==='Easy')mastery[subId].good++;
-  mastery[subId].lastSeen=new Date().toDateString();
+  if(!mastery[subId])mastery[subId]={seen:0,good:0,lastSeen:'',interval:1,easeFactor:2.5,nextReview:''};
+  const m=mastery[subId];
+  // Ensure SM-2 fields exist for records created before this update
+  if(!m.interval)m.interval=1;
+  if(!m.easeFactor)m.easeFactor=2.5;
+  m.seen++;
+  if(rating==='good'||rating==='easy'||rating==='Good'||rating==='Easy')m.good++;
+  m.lastSeen=new Date().toDateString();
+  // SM-2 interval update
+  const r=rating.toLowerCase();
+  if(r==='again'){
+    m.interval=1;
+    m.easeFactor=Math.max(1.3,m.easeFactor-0.2);
+  }else if(r==='hard'){
+    m.interval=Math.max(1,Math.round(m.interval*1.2));
+    m.easeFactor=Math.max(1.3,m.easeFactor-0.15);
+  }else if(r==='good'){
+    m.interval=Math.round(m.interval*m.easeFactor);
+  }else if(r==='easy'){
+    m.interval=Math.round(m.interval*m.easeFactor*1.3);
+    m.easeFactor=Math.min(2.5,m.easeFactor+0.1);
+  }
+  const nxt=new Date();nxt.setDate(nxt.getDate()+m.interval);
+  m.nextReview=nxt.toDateString();
   saveMastery();
   // Track streak and today's card count
   const today=new Date().toDateString();
@@ -85,6 +106,11 @@ function recordCardRating(subId, rating){
   }
   studyStats.todayCards++;
   studyStats.lastStudyDate=today;
+  // QW-9: goal reached toast (once per day)
+  if(studyStats.todayCards===state.dailyGoal&&studyStats.goalToastDate!==today){
+    studyStats.goalToastDate=today;
+    showToast('Goal reached! 🎉');
+  }
   // Per-day weekly tracking for activity chart
   const mon=new Date();mon.setDate(mon.getDate()-((mon.getDay()+6)%7));mon.setHours(0,0,0,0);
   const wk=mon.toDateString();
@@ -96,11 +122,32 @@ function recordCardRating(subId, rating){
 
 // Study statistics (streak, daily card count, written questions answered)
 function loadStudyStats(){
-  try{const s=localStorage.getItem('tabula_stats_v1');if(s){const d=JSON.parse(s);if(!d.weekCards)d.weekCards=[0,0,0,0,0,0,0];if(!d.weekStart)d.weekStart='';return d;}}catch(e){}
-  return {streak:0,lastStudyDate:'',todayCards:0,todayDate:'',writtenAnswered:0,weekCards:[0,0,0,0,0,0,0],weekStart:''};
+  try{const s=localStorage.getItem('tabula_stats_v1');if(s){const d=JSON.parse(s);if(!d.weekCards)d.weekCards=[0,0,0,0,0,0,0];if(!d.weekStart)d.weekStart='';if(!d.goalToastDate)d.goalToastDate='';return d;}}catch(e){}
+  return {streak:0,lastStudyDate:'',todayCards:0,todayDate:'',writtenAnswered:0,weekCards:[0,0,0,0,0,0,0],weekStart:'',goalToastDate:''};
 }
 function saveStudyStats(){localStorage.setItem('tabula_stats_v1',JSON.stringify(studyStats));}
 let studyStats=loadStudyStats();
+
+function showToast(msg){
+  const t=document.createElement('div');
+  t.textContent=msg;
+  t.style.cssText='position:fixed;bottom:32px;left:50%;transform:translateX(-50%);background:#1B2330;color:#fff;padding:12px 24px;border-radius:10px;font-size:14px;font-weight:600;z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,.25);opacity:1;transition:opacity .4s';
+  document.body.appendChild(t);
+  setTimeout(()=>{t.style.opacity='0';setTimeout(()=>t.remove(),400);},2500);
+}
+
+// Written question history — keyed by a stable hash of the question stem
+function _qHash(q){
+  const s=(q.stem||q.prompt||'').slice(0,80)+(q.sub||'');
+  let h=0;for(let i=0;i<s.length;i++){h=((h<<5)-h)+s.charCodeAt(i);h|=0;}
+  return (q.sub||'q')+'_'+Math.abs(h).toString(36);
+}
+function loadWrittenHistory(){
+  try{const s=localStorage.getItem('tabula_written_v1');if(s)return JSON.parse(s);}catch(e){}
+  return {};
+}
+function saveWrittenHistory(){localStorage.setItem('tabula_written_v1',JSON.stringify(writtenHistory));}
+let writtenHistory=loadWrittenHistory();
 
 // Compute overall mastery across all subtopics (unseen subtopics count as 0%)
 function computeOverallMastery(){
@@ -189,15 +236,18 @@ function buildDecks(){
   else if(state.module!=='ALL') cards=cards.filter(c=>c.module===state.module);
   cards=cards.filter(c=>pool[c.sub]);
   state.fcDeck=shuffle(cards);
-  // Stale cards (unseen >7 days or never seen) bubble to front; recently-seen stay at back
-  const now=Date.now();
+  // SM-2 ordering: cards due today (nextReview ≤ today) come first, sorted most-overdue first;
+  // cards not yet due follow, sorted by soonest upcoming review date.
+  const todaySM=new Date();todaySM.setHours(0,0,0,0);
   state.fcDeck.sort((a,b)=>{
-    const aDays=mastery[a.sub]?.lastSeen?Math.floor((now-new Date(mastery[a.sub].lastSeen).getTime())/86400000):999;
-    const bDays=mastery[b.sub]?.lastSeen?Math.floor((now-new Date(mastery[b.sub].lastSeen).getTime())/86400000):999;
-    const aStale=aDays>7, bStale=bDays>7;
-    if(aStale&&!bStale)return -1;
-    if(!aStale&&bStale)return 1;
-    return bDays-aDays;
+    const am=mastery[a.sub];const bm=mastery[b.sub];
+    const aNxt=am?.nextReview?new Date(am.nextReview):new Date(0);
+    const bNxt=bm?.nextReview?new Date(bm.nextReview):new Date(0);
+    const aDue=!am?.nextReview||aNxt<=todaySM;
+    const bDue=!bm?.nextReview||bNxt<=todaySM;
+    if(aDue&&!bDue)return -1;
+    if(!aDue&&bDue)return 1;
+    return aNxt-bNxt; // most overdue first when both due; soonest next when neither due
   });
 
   let qs=QUESTIONS;
@@ -239,6 +289,9 @@ async function initWebR(){
     webRShelter=await new webR.Shelter();
     webRReady=true;
     state.rStatus='ready';
+    // QW-6: pre-load MASS and survival silently
+    try{await webR.evalR('suppressMessages(library(MASS))');}catch(e){console.log('MASS preload skipped:',e);}
+    try{await webR.evalR('suppressMessages(library(survival))');}catch(e){console.log('survival preload skipped:',e);}
   }catch(e){
     state.rStatus='error';
     console.error('WebR failed',e);
@@ -363,14 +416,17 @@ function renderSidebar(){
     {id:'progress',label:'Progress',icon:`<svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M4 16V9M10 16V4M16 16v-4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>`},
   ];
   const d=daysToExam();
+  // QW-3: count SM-2 due cards for badge
+  const _sidebarNow=new Date();_sidebarNow.setHours(0,0,0,0);
+  const _fcDueBadge=CARDS.filter(c=>pool[c.sub]).filter(c=>{const m=mastery[c.sub];return !m?.nextReview||new Date(m.nextReview)<=_sidebarNow;}).length;
   return `<div class="sidebar">
     <div class="sidebar-logo">
       <div class="logo-mark"><svg width="18" height="18" viewBox="0 0 20 20"><rect x="3" y="3" width="6" height="6" rx="1.5"/><rect x="11" y="3" width="6" height="6" rx="1.5" opacity=".6"/><rect x="3" y="11" width="6" height="6" rx="1.5" opacity=".6"/><rect x="11" y="11" width="6" height="6" rx="1.5" opacity=".3"/></svg></div>
       <div><div class="sidebar-logo-text">Tabula</div><div class="sidebar-logo-sub">IFoA Study Companion</div></div>
     </div>
     <div class="sidebar-section">Study</div>
-    ${views.map(v=>`<div class="nav-item${state.view===v.id?' active':''}" onclick="go('${v.id}')">
-      <span class="nav-icon">${v.icon}</span>${v.label}
+    ${views.map(v=>`<div class="nav-item${state.view===v.id?' active':''}" onclick="go('${v.id}')" style="display:flex;align-items:center">
+      <span class="nav-icon">${v.icon}</span>${v.label}${v.id==='flashcards'&&_fcDueBadge>0?`<span style="margin-left:auto;background:#C94040;color:#fff;font-size:9.5px;font-weight:700;padding:1px 6px;border-radius:10px;min-width:18px;text-align:center;line-height:1.5">${_fcDueBadge}</span>`:''}
     </div>`).join('')}
     <div class="sidebar-bottom">
       <div class="exam-card mb-12">
@@ -454,6 +510,7 @@ function renderHome(){
     ${statCard(studyStats.streak,'Day streak','Keep it up!')}
     ${statCard(daysToExam()+'d','To exam',formatExamDate(state.examDate))}
   </div>
+  <div class="kb-hint" style="text-align:right;margin-top:-8px;margin-bottom:12px"><span class="kb-key">S</span> Start studying</div>
   ${renderDangerZone()}
 
   <div class="grid-2 mb-24">
@@ -580,11 +637,11 @@ function renderPlanner(){
         <input type="date" value="${state.examDate}" onchange="setExamDate(this.value)" style="font-family:inherit;font-size:13px;border:1px solid #E8EBF0;border-radius:8px;padding:6px 10px;color:#1B2330;background:#fff;outline:none">
       </div>
       <div>
-        <label class="form-label">Daily goal (min)</label>
+        <label class="form-label">Daily goal (cards)</label>
         <div class="flex items-center gap-8">
-          <button class="btn btn-ghost btn-sm" onclick="adjustGoal(-15)">−</button>
+          <button class="btn btn-ghost btn-sm" onclick="adjustGoal(-5)">−</button>
           <span style="font-size:14px;font-weight:600;min-width:36px;text-align:center">${state.dailyGoal}</span>
-          <button class="btn btn-ghost btn-sm" onclick="adjustGoal(15)">+</button>
+          <button class="btn btn-ghost btn-sm" onclick="adjustGoal(5)">+</button>
         </div>
       </div>
     </div>
@@ -662,6 +719,10 @@ function renderAddModal(){
 // ========================
 function renderFlashcards(){
   const cards=filteredCards();
+  // QW-2: count due today vs upcoming
+  const _fcNow=new Date();_fcNow.setHours(0,0,0,0);
+  const _fcDueToday=cards.filter(c=>{const m=mastery[c.sub];return !m?.nextReview||new Date(m.nextReview)<=_fcNow;}).length;
+  const _fcUpcoming=cards.length-_fcDueToday;
   if(cards.length===0){
     return `<div class="card" style="text-align:center;padding:60px 40px">
       <div style="font-size:32px;margin-bottom:12px">🃏</div>
@@ -687,7 +748,11 @@ function renderFlashcards(){
       <div style="font-size:13px;font-weight:600;color:#C97B30">Review round — cards you found difficult</div>
       <div style="font-size:12px;color:#8A93A2">${cards.length} card${cards.length!==1?'s':''} to retry</div>
     </div>
-  </div>`:''}
+  </div>`:`<div style="display:flex;align-items:center;gap:10px;padding:7px 14px;background:#F5F6F8;border-radius:8px;margin-bottom:14px;font-size:12.5px;color:#8A93A2">
+    <span><strong style="color:#3D6FD1">${_fcDueToday}</strong> due today</span>
+    <span style="color:#D0D5DE">·</span>
+    <span><strong style="color:#1B2330">${_fcUpcoming}</strong> upcoming</span>
+  </div>`}
   <div class="flex items-center justify-between mb-20">
     <div class="text-sm text-secondary">${idx+1} of ${cards.length} cards</div>
     <div class="flex items-center gap-8">
@@ -763,6 +828,14 @@ function renderWrittenPractice(){
   const idx=Math.min(state.paIndex,qs.length-1);
   const q=qs[idx];
 
+  // QW-7: per-question countdown timer
+  const _qRem=(state.paStatus==='idle'||state.paStatus==='answering')&&state.paQStartTime&&state.paQDuration
+    ?Math.max(0,state.paQDuration-Math.floor((Date.now()-state.paQStartTime)/1000))
+    :null;
+  const _qPct=state.paQDuration>0&&_qRem!==null?(state.paQDuration-_qRem)/state.paQDuration:0;
+  const _qColor=_qPct>=0.8?'#C94040':_qPct>=0.5?'#C97B30':'#2E9C8E';
+  const _qFmt=_qRem!==null?`${Math.floor(_qRem/60)}:${String(_qRem%60).padStart(2,'0')}`:'';
+
   return `
   ${renderExamTimer()}
   <div class="flex items-center justify-between mb-16">
@@ -785,6 +858,7 @@ function renderWrittenPractice(){
     <div class="flex items-center gap-12">
       <div class="text-sm text-secondary">Question ${idx+1} of ${qs.length}</div>
       ${state.paStartTime?`<div class="text-sm text-secondary" style="font-variant-numeric:tabular-nums">⏱ ${fmtElapsed(Date.now()-state.paStartTime)}</div>`:''}
+      ${_qRem!==null?`<span style="font-size:12px;font-weight:600;color:${_qColor};font-variant-numeric:tabular-nums">${_qFmt} left</span>`:''}
     </div>
     <div class="flex items-center gap-8">
       ${q.ai?`<span class="badge" style="background:#ECF1FB;color:#3D6FD1">✨ AI</span>`:''}
@@ -802,8 +876,14 @@ function renderWrittenPractice(){
 
   ${state.paStatus==='idle'||state.paStatus==='answering'?`
   <div class="card mb-16">
-    <div style="font-size:13px;font-weight:600;margin-bottom:10px">Your answer</div>
-    <textarea id="pa-answer" rows="7" placeholder="Write your answer here…" oninput="state.paText=this.value">${escHtml(state.paText)}</textarea>
+    <div class="flex items-center justify-between mb-10">
+      <div style="font-size:13px;font-weight:600">Your answer</div>
+      <button class="btn btn-ghost btn-sm" onclick="togglePAPreview()">${state.paPreview?'✏ Edit':'👁 Preview'}</button>
+    </div>
+    ${state.paPreview
+      ?`<div id="pa-preview" style="font-size:14px;line-height:1.7;padding:12px;background:#F8F9FB;border-radius:8px;min-height:120px">${state.paText?renderMd(state.paText):'<span style="color:#8A93A2">Nothing to preview yet</span>'}</div>`
+      :`<textarea id="pa-answer" rows="7" placeholder="Write your answer here… (use $…$ for inline LaTeX)" oninput="state.paText=this.value">${escHtml(state.paText)}</textarea>`
+    }
     <div class="flex items-center justify-between" style="margin-top:12px">
       <div class="text-xs text-secondary">Write a full exam-style answer</div>
       <button class="btn btn-primary" onclick="submitPA()">Submit</button>
@@ -918,7 +998,7 @@ function renderRPractice(){
   const code=state.rCode!==null?state.rCode:defaultCode;
 
   let statusBadge='';
-  if(state.rStatus==='loading') statusBadge=`<span class="badge" style="background:#FDF7F0;color:#C97B30">Loading R engine…</span>`;
+  if(state.rStatus==='loading') statusBadge=`<span class="badge" style="background:#FDF7F0;color:#C97B30"><span style="display:inline-block;width:10px;height:10px;border:2px solid #C97B30;border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:4px"></span>R initialising…</span>`;
   else if(state.rStatus==='ready') statusBadge=`<span class="badge" style="background:#F0FAF8;color:#2E9C8E">R ready</span>`;
   else if(state.rStatus==='error') statusBadge=`<span class="badge" style="background:#FDF2F2;color:#C94040">R unavailable</span>`;
 
@@ -979,7 +1059,7 @@ function renderRPractice(){
       </div>
       <div class="flex items-center gap-8">
         ${state.rStatus==='idle'?`<button class="rs-btn rs-btn-run" onclick="loadWebR()">⚡ Start R</button>`:''}
-        ${state.rStatus==='loading'?`<span class="rs-status rs-status-loading">● Starting R…</span>`:''}
+        ${state.rStatus==='loading'?`<span class="rs-status rs-status-loading">● R initialising…</span>`:''}
         ${state.rStatus==='ready'?`
           <button class="rs-btn rs-btn-ghost" onclick="resetRCode()">↺ Reset</button>
           <button class="rs-btn rs-btn-run" onclick="runRCode()" ${state.rRunning?'disabled':''}>
@@ -1080,6 +1160,26 @@ function renderProgress(){
   SYLLABUS.forEach(c=>c.topics.forEach(t=>t.subs.forEach(s=>allSubs.push(s.id))));
   const checked=allSubs.filter(id=>pool[id]).length;
 
+  // Render recent written question history
+  const whEntries=Object.values(writtenHistory).sort((a,b)=>b.timestamp.localeCompare(a.timestamp)).slice(0,8);
+  const whHtml=whEntries.length===0?'':`
+  <div class="card mb-16">
+    <div class="flex items-center justify-between mb-12">
+      <div style="font-size:14px;font-weight:600">Recent written questions</div>
+      <div class="text-xs text-secondary">${whEntries.length} shown</div>
+    </div>
+    ${whEntries.map(e=>{
+      const vmap={correct:['#F0FAF8','#2E9C8E','Correct'],partial:['#FDF7F0','#C97B30','Partial'],incorrect:['#FDF2F2','#C94040','Incorrect']};
+      const [bg,col,lbl]=vmap[e.verdict]||['#F5F6F8','#8A93A2',e.verdict];
+      const dt=new Date(e.timestamp).toLocaleDateString('en-GB',{day:'numeric',month:'short'});
+      return `<div class="danger-row" style="gap:8px">
+        <span class="badge" style="background:${bg};color:${col};flex-shrink:0">${lbl}</span>
+        <div style="flex:1;font-size:12.5px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical">${escHtml(e.stem||e.topic)}</div>
+        <span class="text-xs text-secondary" style="flex-shrink:0">${e.score}/${e.maxMarks} · ${dt}</span>
+      </div>`;
+    }).join('')}
+  </div>`;
+
   return `
   <div class="flex items-center justify-between mb-20">
     <div class="text-sm text-secondary">${checked} / ${allSubs.length} subtopics in study pool · Mastery % updates as you rate flashcards</div>
@@ -1088,6 +1188,8 @@ function renderProgress(){
       <button class="btn btn-ghost btn-sm" onclick="poolAll(false)">Clear all</button>
     </div>
   </div>
+
+  ${whHtml}
 
   ${SYLLABUS.map(course=>{
     const coursePct=avgMastery(course);
@@ -1142,7 +1244,7 @@ function renderProgress(){
 
 function subMastery(id){
   const m=mastery[id];
-  if(!m||m.seen===0) return 0;
+  if(!m||m.seen<1) return 0; // require at least 1 card seen before reporting a percentage
   return Math.round(m.good/m.seen*100);
 }
 
@@ -1163,17 +1265,27 @@ function avgMastery(course){
 window.go=function(view){
   state.view=view;
   if(view==='flashcards'){state.fcIndex=0;state.fcFlipped=false;state.fcWeakQueue=[];state.fcReviewRound=false;buildDecks();}
-  if(view==='practice'){state.paIndex=0;state.paText='';state.paStatus='idle';state.paVerdict=null;state.paScore=0;state.paWeakQueue=[];state.paReviewRound=false;stopPATimer();buildDecks();startPATimer();}
-  if(view!=='practice')stopPATimer();
+  if(view==='practice'){
+    state.paIndex=0;state.paText='';state.paStatus='idle';state.paVerdict=null;state.paScore=0;state.paWeakQueue=[];state.paReviewRound=false;state.paPreview=false;
+    stopPATimer();buildDecks();startPATimer();
+    if(state.module==='CS1B') initWebR(); // QW-5: auto-init R
+    // QW-7: start countdown for first question
+    if(state.module!=='CS1B'&&state.paDeck.length>0){state.paQStartTime=Date.now();state.paQDuration=Math.round(state.paDeck[0].marks*1.8)*60;}
+  }
+  if(view!=='practice'){stopPATimer();state.paQStartTime=null;state.paQDuration=0;} // QW-7: clear countdown
   render();
 };
 
 window.setModule=function(mod){
   state.module=mod;
   state.fcIndex=0;state.fcFlipped=false;state.fcWeakQueue=[];state.fcReviewRound=false;
-  state.paIndex=0;state.paText='';state.paStatus='idle';state.paVerdict=null;state.paScore=0;state.paWeakQueue=[];state.paReviewRound=false;stopPATimer();
+  state.paIndex=0;state.paText='';state.paStatus='idle';state.paVerdict=null;state.paScore=0;state.paWeakQueue=[];state.paReviewRound=false;state.paPreview=false;stopPATimer();
   state.rIndex=0;state.rCode=null;state.rOutput=[];state.rImages=[];state.rRan=false;state.showHint=false;state.showModel=false;
+  state.paQStartTime=null;state.paQDuration=0; // QW-7: reset countdown
   buildDecks();
+  if(mod==='CS1B'&&state.view==='practice') initWebR(); // QW-5: auto-init R
+  // QW-7: start countdown for first written question
+  if(mod!=='CS1B'&&state.view==='practice'&&state.paDeck.length>0){state.paQStartTime=Date.now();state.paQDuration=Math.round(state.paDeck[0].marks*1.8)*60;}
   render();
 };
 
@@ -1212,6 +1324,7 @@ window.submitPA=function(){
     return;
   }
   state.paStatus='submitted';
+  state.paQStartTime=null; // QW-7: pause countdown on submit
   render();
   requestAnimationFrame(()=>{
     const target=document.getElementById('pa-result');
@@ -1223,13 +1336,20 @@ window.gradePA=function(verdict){
   state.paVerdict=verdict;
   const qs=filteredQuestions();
   const idx=Math.min(state.paIndex,qs.length-1);
-  const marks=qs[idx].marks;
+  const q=qs[idx];
+  const marks=q.marks;
   const add=verdict==='correct'?marks:verdict==='partial'?Math.round(marks/2):0;
   state.paScore+=add;
-  if(verdict==='incorrect'||verdict==='partial') state.paWeakQueue.push(qs[idx]);
+  if(verdict==='incorrect'||verdict==='partial') state.paWeakQueue.push(q);
   state.paStatus='graded';
   studyStats.writtenAnswered=(studyStats.writtenAnswered||0)+1;
   saveStudyStats();
+  // Save to written history (Issue-04)
+  const qid=_qHash(q);
+  writtenHistory[qid]={timestamp:new Date().toISOString(),verdict,score:add,maxMarks:marks,topic:q.topic||'',stem:(q.stem||'').slice(0,120),answer:state.paText.slice(0,500)};
+  saveWrittenHistory();
+  // Update mastery via same SM-2 logic as flashcards (Issue-06)
+  if(q.sub&&q.sub!=='ai') recordCardRating(q.sub, verdict==='correct'?'good':verdict==='partial'?'hard':'again');
   render();
 };
 
@@ -1240,6 +1360,7 @@ window.nextPA=function(){
   state.paVerdict=null;
   state.paAIFeedback='';
   state.aiMarking=false;
+  state.paPreview=false;
   if(state.paIndex>=qs.length){
     if(state.paWeakQueue.length>0){
       state.paReviewRound=true;
@@ -1247,11 +1368,14 @@ window.nextPA=function(){
       state.paWeakQueue=[];
       state.paIndex=0;
       state.paStatus='idle';
+      const _nq=filteredQuestions()[0];if(_nq){state.paQStartTime=Date.now();state.paQDuration=Math.round(_nq.marks*1.8)*60;} // QW-7
     }else{
       state.paStatus='complete';
+      state.paQStartTime=null;state.paQDuration=0; // QW-7
     }
   }else{
     state.paStatus='idle';
+    const _nq2=filteredQuestions()[state.paIndex];if(_nq2){state.paQStartTime=Date.now();state.paQDuration=Math.round(_nq2.marks*1.8)*60;} // QW-7
   }
   render();
 };
@@ -1291,6 +1415,11 @@ Return ONLY a valid JSON object with no markdown:
     state.paStatus='graded';
     studyStats.writtenAnswered=(studyStats.writtenAnswered||0)+1;
     saveStudyStats();
+    // Save to written history and update mastery (Issues 04 + 06)
+    const qid=_qHash(q);
+    writtenHistory[qid]={timestamp:new Date().toISOString(),verdict,score:add,maxMarks:q.marks,topic:q.topic||'',stem:(q.stem||'').slice(0,120),answer:studentAnswer.slice(0,500)};
+    saveWrittenHistory();
+    if(q.sub&&q.sub!=='ai') recordCardRating(q.sub, verdict==='correct'?'good':verdict==='partial'?'hard':'again');
     render();
     requestAnimationFrame(()=>{
       const t=document.getElementById('pa-result');
@@ -1305,8 +1434,19 @@ Return ONLY a valid JSON object with no markdown:
 };
 
 window.resetPA=function(){stopPATimer();startPATimer();
-  state.paIndex=0;state.paText='';state.paStatus='idle';state.paVerdict=null;state.paScore=0;state.paWeakQueue=[];state.paReviewRound=false;buildDecks();
+  state.paIndex=0;state.paText='';state.paStatus='idle';state.paVerdict=null;state.paScore=0;state.paWeakQueue=[];state.paReviewRound=false;state.paPreview=false;buildDecks();
+  // QW-7: restart countdown for first question
+  if(state.paDeck.length>0){state.paQStartTime=Date.now();state.paQDuration=Math.round(state.paDeck[0].marks*1.8)*60;}
   render();
+};
+
+window.togglePAPreview=function(){
+  state.paPreview=!state.paPreview;
+  render();
+  // QW-8: trigger MathJax on preview panel
+  if(state.paPreview&&window.MathJax&&MathJax.typesetPromise){
+    setTimeout(()=>MathJax.typesetPromise(['#pa-preview']).catch(()=>{}),50);
+  }
 };
 
 window.loadWebR=function(){
@@ -1464,7 +1604,7 @@ window.setExamDate=function(val){
 };
 
 window.adjustGoal=function(delta){
-  state.dailyGoal=Math.max(15,state.dailyGoal+delta);
+  state.dailyGoal=Math.max(5,state.dailyGoal+delta);
   saveExamDate();
   render();
 };
@@ -1613,7 +1753,9 @@ window.generateWrittenQ=async function(){
     const aiQ={module:mod,sub:'ai',chip:color,code:mod,topic:q.topic||'AI Generated',marks:q.marks||5,stem:q.stem,model:q.model,ai:true};
     if(!state.paDeck||state.paDeck.length===0) buildDecks();
     state.paDeck.unshift(aiQ);
-    state.paIndex=0;state.paText='';state.paStatus='idle';state.paVerdict=null;
+    state.paIndex=0;state.paText='';state.paStatus='idle';state.paVerdict=null;state.paPreview=false;
+    // QW-7: start countdown for new AI question
+    state.paQStartTime=Date.now();state.paQDuration=Math.round(aiQ.marks*1.8)*60;
   }catch(e){
     if(e.message==='NO_KEY') state.showKeyModal=true;
     else state.aiGenError=e.message||'Generation failed';
@@ -1900,6 +2042,10 @@ function savePlanForWeek(plan, offset) {
 document.addEventListener('keydown', function(e) {
   if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
   if (e.metaKey || e.ctrlKey || e.altKey) return;
+  // QW-4: S to start studying from Dashboard
+  if (state.view === 'home' && (e.key === 's' || e.key === 'S')) {
+    e.preventDefault(); go('flashcards'); return;
+  }
   if (state.view === 'flashcards') {
     const cards = filteredCards();
     if (state.fcIndex >= cards.length) return;
