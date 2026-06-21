@@ -1208,8 +1208,8 @@ function renderProgress(){
           <div class="text-sm text-secondary">${course.topics.length} topics · ${course.topics.reduce((a,t)=>a+t.subs.length,0)} subtopics</div>
         </div>
         <div style="text-align:right;margin-right:8px">
-          <div style="font-size:20px;font-weight:700;color:${course.color}">${coursePct}%</div>
-          <div class="text-xs text-secondary">mastery</div>
+          <div style="font-size:20px;font-weight:700;color:${course.color}">${Math.round(course.topics.reduce((a,t)=>a+topicCoverage(t),0)/course.topics.length)}%</div>
+          <div class="text-xs text-secondary">studied</div>
         </div>
         <span style="color:#8A93A2;font-size:14px;transition:transform .2s;display:inline-block;transform:rotate(${open?90:0}deg)">▶</span>
       </div>
@@ -1217,7 +1217,7 @@ function renderProgress(){
       ${open?`
       <div style="margin-top:12px">
         ${course.topics.map(topic=>{
-          const topicPct=topicMastery(topic);
+          const covPct=topicCoverage(topic);
           const topicPoolPct=topic.subs.length?Math.round(topic.subs.filter(s=>pool[s.id]).length/topic.subs.length*100):0;
           return `
           <div>
@@ -1226,21 +1226,25 @@ function renderProgress(){
               <input type="checkbox" ${topicPoolPct===100?'checked':topicPoolPct>0?'indeterminate-js':''} onclick="event.stopPropagation();toggleTopic_pool('${topic.id}',this.checked)" style="flex-shrink:0;width:16px;height:16px;cursor:pointer" id="tc-${topic.id}">
               <div style="flex:1">
                 <div style="font-size:13.5px;font-weight:600">${topic.name} <span style="color:#8A93A2;font-weight:400">[${topic.w}%]</span></div>
-                <div style="font-size:11.5px;color:#8A93A2;margin-top:2px">${topic.subs.length} subtopics</div>
+                <div style="font-size:11.5px;color:#8A93A2;margin-top:2px">${topic.subs.filter(s=>mastery[s.id]&&mastery[s.id].seen>0).length}/${topic.subs.length} subtopics studied</div>
               </div>
               <div class="mastery-bar" style="max-width:100px">
-                <div class="mastery-fill" style="width:${topicPct}%;background:${course.color}"></div>
+                <div class="mastery-fill" style="width:${covPct}%;background:${course.color}"></div>
               </div>
-              <div style="font-size:13px;font-weight:600;color:${course.color};min-width:36px;text-align:right">${topicPct}%</div>
+              <div style="font-size:13px;font-weight:600;color:${course.color};min-width:36px;text-align:right">${covPct}%</div>
             </div>
-            ${state.expandedTopics[topic.id]?topic.subs.map(sub=>`
+            ${state.expandedTopics[topic.id]?topic.subs.map(sub=>{
+              const studied=mastery[sub.id]&&mastery[sub.id].seen>0;
+              return `
               <div class="sub-row">
                 <input type="checkbox" ${pool[sub.id]?'checked':''} onchange="togglePool('${sub.id}',this.checked)">
                 <div style="flex:1">
                   <div style="font-size:12px;color:#8A93A2;font-weight:600;margin-bottom:1px">${sub.num}</div>
                   <div style="font-size:13px">${sub.name}</div>
                 </div>
-              </div>`).join(''):''}
+                <span style="font-size:11px;color:${studied?'#2E9C8E':'#B0B7C3'};flex-shrink:0;font-weight:600">${studied?'✓ studied':'unseen'}</span>
+              </div>`;
+            }).join(''):''}
           </div>`;
         }).join('')}
       </div>`:''}
@@ -1250,8 +1254,19 @@ function renderProgress(){
 
 function subMastery(id){
   const m=mastery[id];
-  if(!m||m.seen<1) return 0; // require at least 1 card seen before reporting a percentage
+  if(!m||m.seen<1) return 0;
   return Math.round(m.good/m.seen*100);
+}
+
+// Coverage = % of sub-topics in a topic that have been studied at least once
+function subCoverage(id){
+  const m=mastery[id];
+  return (m&&m.seen>0)?100:0;
+}
+
+function topicCoverage(topic){
+  if(!topic.subs.length) return 0;
+  return Math.round(topic.subs.reduce((a,s)=>a+subCoverage(s.id),0)/topic.subs.length);
 }
 
 function topicMastery(topic){
@@ -1475,12 +1490,17 @@ window.runRCode=async function(){
     }
     if(output.length===0) output.push({type:'out',text:'Code ran with no output.'});
     state.rOutput=output;
-    // Capture plots
+    // Flush device and capture plots
     try{
+      await webR.evalR('try(grDevices::dev.off(),silent=TRUE)');
       const imgs=await webR.evalR('webr::canvas_capture()');
       const imgData=await imgs.toJs();
-      if(imgData&&imgData.values) state.rImages=imgData.values.map(v=>'data:image/png;base64,'+v);
-    }catch(e){}
+      if(imgData&&imgData.values&&imgData.values.length>0){
+        state.rImages=imgData.values.filter(Boolean).map(v=>'data:image/png;base64,'+v);
+      }
+    }catch(e){
+      state.rOutput.push({type:'error',text:'Plot capture error: '+String(e)});
+    }
     // Capture environment
     try{
       const envR=await webR.evalR(`
