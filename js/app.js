@@ -270,7 +270,8 @@ function filteredQuestions(){
 }
 
 function filteredRQ(){
-  return [...state.aiRQuestions, ...R_QUESTIONS];
+  const cs1bInPool=SYLLABUS.some(c=>c.code==='CS1B'&&c.topics.some(t=>t.subs.some(s=>pool[s.id])));
+  return [...state.aiRQuestions,...(cs1bInPool?R_QUESTIONS:[])];
 }
 
 // WebR
@@ -546,15 +547,17 @@ function renderHome(){
         const circ=163.4;
         const mast=moduleCardMastery(m.id);
         const due=moduleCardsDue(m.id);
-        const fill=Math.round(mast/100*circ*10)/10;
+        const fill=due>0?Math.round(mast/100*circ*10)/10:0;
+        const ringColor=due>0?m.color:'#D0D5DE';
+        const nameColor=due>0?'#1B2330':'#8A93A2';
         return `<div class="flex items-center gap-8 mb-12" style="cursor:pointer" onclick="go('progress')">
           <svg width="32" height="32" viewBox="0 0 60 60">
             <circle cx="30" cy="30" r="26" class="ring-bg"/>
-            <circle cx="30" cy="30" r="26" class="ring-fill progress-ring" stroke="${m.color}" stroke-dasharray="${fill} ${circ-fill}"/>
+            <circle cx="30" cy="30" r="26" class="ring-fill progress-ring" stroke="${ringColor}" stroke-dasharray="${fill} ${circ-fill}"/>
           </svg>
           <div style="flex:1">
-            <div style="font-size:13px;font-weight:600;color:#1B2330">${m.name}</div>
-            <div style="font-size:11.5px;color:#8A93A2">${mast}% mastery · ${due} in pool</div>
+            <div style="font-size:13px;font-weight:600;color:${nameColor}">${m.name}</div>
+            <div style="font-size:11.5px;color:#8A93A2">${due>0?mast+'% mastery · '+due+' in pool':'not in pool'}</div>
           </div>
           ${due>0?`<span class="due-badge">${due}</span>`:''}
         </div>`;
@@ -678,7 +681,7 @@ function renderPlanner(){
             ${state.planEdit?`<span onclick="removeChip(${di},${ci})" style="cursor:pointer;opacity:.8;font-size:14px;flex-shrink:0">×</span>`:''}
           </div>
         `).join('')}
-        ${isCurrentWeek&&!state.planEdit&&di===todayIdx&&day.chips.length>0?`
+        ${isCurrentWeek&&!state.planEdit&&di===todayIdx?`
           <div style="margin-top:4px;font-size:11px;color:#2E9C8E;font-weight:600">← today</div>
         `:''}
         ${state.planEdit?`<button class="plan-add-btn" onclick="openAddModal(${di})">+ Add</button>`:''}
@@ -833,8 +836,8 @@ function renderWrittenPractice(){
   const idx=Math.min(state.paIndex,qs.length-1);
   const q=qs[idx];
 
-  // QW-7: per-question countdown timer
-  const _qRem=(state.paStatus==='idle'||state.paStatus==='answering')&&state.paQStartTime&&state.paQDuration
+  // QW-7: per-question countdown timer (hidden when exam mode active — exam timer takes over)
+  const _qRem=!state.examMode&&(state.paStatus==='idle'||state.paStatus==='answering')&&state.paQStartTime&&state.paQDuration
     ?Math.max(0,state.paQDuration-Math.floor((Date.now()-state.paQStartTime)/1000))
     :null;
   const _qPct=state.paQDuration>0&&_qRem!==null?(state.paQDuration-_qRem)/state.paQDuration:0;
@@ -1200,7 +1203,7 @@ function renderProgress(){
     <div class="text-sm text-secondary">${checked} / ${allSubs.length} subtopics covered in notes · Flashcards &amp; practice draw only from ticked sections</div>
     <div class="flex gap-8">
       <button class="btn btn-ghost btn-sm" onclick="poolAll(true)">Tick all</button>
-      <button class="btn btn-ghost btn-sm" onclick="poolAll(false)">Clear all</button>
+      <button class="btn btn-ghost btn-sm" style="color:#C94040" onclick="poolAll(false)">Clear all</button>
     </div>
   </div>
 
@@ -1590,7 +1593,12 @@ window.togglePool=function(id,val){
 };
 
 window.poolAll=function(val){
-  SYLLABUS.forEach(c=>c.topics.forEach(t=>t.subs.forEach(s=>{pool[s.id]=val;})));
+  if(!val&&!confirm('Clear all subtopics from your study pool?')) return;
+  // Prune stale keys not in current syllabus before writing
+  const validIds=new Set();
+  SYLLABUS.forEach(c=>c.topics.forEach(t=>t.subs.forEach(s=>validIds.add(s.id))));
+  Object.keys(pool).forEach(k=>{if(!validIds.has(k)) delete pool[k];});
+  validIds.forEach(id=>{pool[id]=val;});
   savePool();
   invalidateDecks();
   render();
@@ -1960,6 +1968,11 @@ window.drillSubTopic = function(subId) {
       }
     }
     if (modId !== 'ALL') break;
+  }
+  const matchingCards = CARDS.filter(c=>c.sub===subId&&pool[c.sub]);
+  if(matchingCards.length===0){
+    showToast(`No flashcards for this topic yet`);
+    return;
   }
   state.module = modId;
   state.drillSub = subId; // buildDecks reads this to filter
