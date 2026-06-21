@@ -45,6 +45,7 @@ let state = {
   expandedTopics:{},
   expandedCourses:{CM1:true, CS1:true, CB1:true},
   planWeekOffset:0,
+  drillSub: null,
   examMode:false, examModeEnd:null,
 };
 
@@ -232,7 +233,8 @@ function daysToExam(){
 
 function buildDecks(){
   let cards=CARDS;
-  if(state.module==='CS1B') cards=cards.filter(c=>c.module==='CS1A'||c.module==='CS1B');
+  if(state.drillSub){cards=cards.filter(c=>c.sub===state.drillSub);state.drillSub=null;}
+  else if(state.module==='CS1B') cards=cards.filter(c=>c.module==='CS1A'||c.module==='CS1B');
   else if(state.module!=='ALL') cards=cards.filter(c=>c.module===state.module);
   cards=cards.filter(c=>pool[c.sub]);
   state.fcDeck=shuffle(cards);
@@ -645,9 +647,12 @@ function renderPlanner(){
         </div>
       </div>
     </div>
-    <button class="btn ${state.planEdit?'btn-primary':'btn-ghost'}" onclick="togglePlanEdit()">
-      ${state.planEdit?'Done editing':'Edit plan'}
-    </button>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-ghost btn-sm" onclick="autoSuggestPlan()" title="Fill empty days with sessions based on your weakest modules">✨ Suggest</button>
+      <button class="btn ${state.planEdit?'btn-primary':'btn-ghost'}" onclick="togglePlanEdit()">
+        ${state.planEdit?'Done editing':'Edit plan'}
+      </button>
+    </div>
   </div>
 
   <div class="flex items-center justify-between mb-16">
@@ -1895,13 +1900,68 @@ function renderDangerZone() {
       <button class="btn btn-ghost btn-sm" onclick="go('progress')">All progress →</button>
     </div>
     ${weakest.map(s => `
-      <div class="danger-row">
+      <div class="danger-row" onclick="drillSubTopic('${s.id}')" style="cursor:pointer" title="Drill this topic">
         <span class="badge" style="background:${s.color}18;color:${s.color};font-size:10px;flex-shrink:0;white-space:nowrap">${s.course} ${s.num}</span>
         <div style="flex:1;font-size:12.5px;line-height:1.3;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">${escHtml(s.name)}</div>
-        <div style="flex-shrink:0;font-size:13px;font-weight:700;color:${s.pct < 0 ? '#B0B7C3' : s.pct < 40 ? '#C94040' : '#C97B30'};min-width:52px;text-align:right">${s.pct < 0 ? 'Unseen' : s.pct + '%'}</div>
+        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+          <span style="font-size:13px;font-weight:700;color:${s.pct < 0 ? '#B0B7C3' : s.pct < 40 ? '#C94040' : '#C97B30'}">${s.pct < 0 ? 'Unseen' : s.pct + '%'}</span>
+          <span style="font-size:11px;color:#8A93A2">▶</span>
+        </div>
       </div>`).join('')}
   </div>`;
 }
+
+// Drill a single sub-topic: store target sub so buildDecks() can filter
+window.drillSubTopic = function(subId) {
+  let modId = 'ALL';
+  for (const course of SYLLABUS) {
+    for (const topic of course.topics) {
+      if (topic.subs.some(s => s.id === subId)) {
+        const cm1TopicIdx = course.code === 'CM1' ? course.topics.indexOf(topic) : -1;
+        if (course.code === 'CM1') modId = cm1TopicIdx < 2 ? 'CM1A' : 'CM1B';
+        else modId = course.code;
+        break;
+      }
+    }
+    if (modId !== 'ALL') break;
+  }
+  state.module = modId;
+  state.drillSub = subId; // buildDecks reads this to filter
+  go('flashcards');        // calls buildDecks() → picks up drillSub
+  showToast(`Drilling: ${subId.replace(/-/g,' ')} (${state.fcDeck.length} card${state.fcDeck.length!==1?'s':''})`);
+};
+
+// Auto-fill the current week's plan based on weakest modules
+window.autoSuggestPlan = function() {
+  // Rank modules by mastery (ascending — lowest first)
+  const modMastery = MODULES.map(m => ({
+    modId: m.id, label: m.label, color: m.color,
+    pct: moduleCardMastery(m.id)
+  })).sort((a,b) => a.pct - b.pct);
+
+  const plan = loadPlanForWeek(state.planWeekOffset || 0);
+  const days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  // Assign sessions: rotate through weakest 3 modules, skip Sunday
+  const priorities = modMastery.slice(0, 3);
+  let qi = 0;
+  plan.forEach((day, i) => {
+    if (i === 6) return; // leave Sunday free
+    if (day.chips && day.chips.length > 0) return; // don't overwrite existing chips
+    const mod = priorities[qi % priorities.length];
+    qi++;
+    const type = (qi % 2 === 0) ? 'practice' : 'flashcards';
+    day.chips = [{
+      label: `${mod.label.split(' ')[0]} · ${type === 'flashcards' ? 'Flashcards' : 'Written'}`,
+      color: mod.color,
+      modId: mod.modId,
+      type
+    }];
+  });
+  savePlanForWeek(plan, state.planWeekOffset || 0);
+  state.planData = plan;
+  showToast('Plan filled based on your weakest modules');
+  render();
+};
 
 function renderOverdueAlerts() {
   const now = Date.now();

@@ -1,0 +1,24 @@
+{
+  "name": "Tabula — Actuarial Study",
+  "short_name": "Tabula",
+  "description": "IFoA actuarial exam study companion — flashcards, practice questions, spaced repetition",
+  "start_url": "/actuary-companion/",
+  "display": "standalone",
+  "background_color": "#F5F6FA",
+  "theme_color": "#3D6FD1",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
