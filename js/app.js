@@ -1571,23 +1571,28 @@ window.toggleCourse=function(code){
   render();
 };
 
+function invalidateDecks(){state.fcDeck=[];state.paDeck=[];}
+
 window.toggleTopic_pool=function(topicId, val){
   const topic=SYLLABUS.flatMap(c=>c.topics).find(t=>t.id===topicId);
   if(!topic) return;
   topic.subs.forEach(s=>{ pool[s.id]=val; });
   savePool();
+  invalidateDecks();
   render();
 };
 
 window.togglePool=function(id,val){
   pool[id]=val;
   savePool();
+  invalidateDecks();
   render();
 };
 
 window.poolAll=function(val){
   SYLLABUS.forEach(c=>c.topics.forEach(t=>t.subs.forEach(s=>{pool[s.id]=val;})));
   savePool();
+  invalidateDecks();
   render();
 };
 
