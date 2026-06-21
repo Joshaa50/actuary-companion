@@ -452,7 +452,7 @@ function formatExamDate(d){
 
 function renderTopbar(){
   const titles={home:'Dashboard',planner:'Weekly Planner',flashcards:'Flashcards',practice:'Practice',progress:'Progress'};
-  const subs={home:'Good luck today — keep going!',planner:'Plan your study week',flashcards:'Spaced repetition review',practice:'Written & coding questions',progress:'Syllabus mastery tracker'};
+  const subs={home:'Good luck today — keep going!',planner:'Plan your study week',flashcards:'Spaced repetition review',practice:'Written & coding questions',progress:'Track notes coverage · controls your study pool'};
   return `<div class="topbar">
     <div>
       <div class="topbar-title">${titles[state.view]||''}</div>
@@ -1160,6 +1160,16 @@ function renderRPractice(){
 // ========================
 // PROGRESS
 // ========================
+function topicPoolPct(topic){
+  if(!topic.subs.length) return 0;
+  return Math.round(topic.subs.filter(s=>pool[s.id]).length/topic.subs.length*100);
+}
+function coursePoolPct(course){
+  const allSubs=course.topics.flatMap(t=>t.subs);
+  if(!allSubs.length) return 0;
+  return Math.round(allSubs.filter(s=>pool[s.id]).length/allSubs.length*100);
+}
+
 function renderProgress(){
   const allSubs=[];
   SYLLABUS.forEach(c=>c.topics.forEach(t=>t.subs.forEach(s=>allSubs.push(s.id))));
@@ -1187,9 +1197,9 @@ function renderProgress(){
 
   return `
   <div class="flex items-center justify-between mb-20">
-    <div class="text-sm text-secondary">${checked} / ${allSubs.length} subtopics in study pool · Mastery % updates as you rate flashcards</div>
+    <div class="text-sm text-secondary">${checked} / ${allSubs.length} subtopics covered in notes · Flashcards &amp; practice draw only from ticked sections</div>
     <div class="flex gap-8">
-      <button class="btn btn-ghost btn-sm" onclick="poolAll(true)">Select all</button>
+      <button class="btn btn-ghost btn-sm" onclick="poolAll(true)">Tick all</button>
       <button class="btn btn-ghost btn-sm" onclick="poolAll(false)">Clear all</button>
     </div>
   </div>
@@ -1208,8 +1218,8 @@ function renderProgress(){
           <div class="text-sm text-secondary">${course.topics.length} topics · ${course.topics.reduce((a,t)=>a+t.subs.length,0)} subtopics</div>
         </div>
         <div style="text-align:right;margin-right:8px">
-          <div style="font-size:20px;font-weight:700;color:${course.color}">${Math.round(course.topics.reduce((a,t)=>a+topicCoverage(t),0)/course.topics.length)}%</div>
-          <div class="text-xs text-secondary">studied</div>
+          <div style="font-size:20px;font-weight:700;color:${course.color}">${coursePoolPct(course)}%</div>
+          <div class="text-xs text-secondary">covered</div>
         </div>
         <span style="color:#8A93A2;font-size:14px;transition:transform .2s;display:inline-block;transform:rotate(${open?90:0}deg)">▶</span>
       </div>
@@ -1217,32 +1227,32 @@ function renderProgress(){
       ${open?`
       <div style="margin-top:12px">
         ${course.topics.map(topic=>{
-          const covPct=topicCoverage(topic);
-          const topicPoolPct=topic.subs.length?Math.round(topic.subs.filter(s=>pool[s.id]).length/topic.subs.length*100):0;
+          const pct=topicPoolPct(topic);
+          const pooled=topic.subs.filter(s=>pool[s.id]).length;
           return `
           <div>
             <div class="topic-row${state.expandedTopics[topic.id]?' expanded':''}" onclick="toggleTopic('${topic.id}')">
               <span class="expand-caret" style="color:#8A93A2;font-size:12px">▶</span>
-              <input type="checkbox" ${topicPoolPct===100?'checked':topicPoolPct>0?'indeterminate-js':''} onclick="event.stopPropagation();toggleTopic_pool('${topic.id}',this.checked)" style="flex-shrink:0;width:16px;height:16px;cursor:pointer" id="tc-${topic.id}">
+              <input type="checkbox" ${pct===100?'checked':pct>0?'indeterminate-js':''} onclick="event.stopPropagation();toggleTopic_pool('${topic.id}',this.checked)" style="flex-shrink:0;width:16px;height:16px;cursor:pointer" id="tc-${topic.id}">
               <div style="flex:1">
                 <div style="font-size:13.5px;font-weight:600">${topic.name} <span style="color:#8A93A2;font-weight:400">[${topic.w}%]</span></div>
-                <div style="font-size:11.5px;color:#8A93A2;margin-top:2px">${topic.subs.filter(s=>mastery[s.id]&&mastery[s.id].seen>0).length}/${topic.subs.length} subtopics studied</div>
+                <div style="font-size:11.5px;color:#8A93A2;margin-top:2px">${pooled}/${topic.subs.length} subtopics covered</div>
               </div>
               <div class="mastery-bar" style="max-width:100px">
-                <div class="mastery-fill" style="width:${covPct}%;background:${course.color}"></div>
+                <div class="mastery-fill" style="width:${pct}%;background:${course.color}"></div>
               </div>
-              <div style="font-size:13px;font-weight:600;color:${course.color};min-width:36px;text-align:right">${covPct}%</div>
+              <div style="font-size:13px;font-weight:600;color:${course.color};min-width:36px;text-align:right">${pct}%</div>
             </div>
             ${state.expandedTopics[topic.id]?topic.subs.map(sub=>{
-              const studied=mastery[sub.id]&&mastery[sub.id].seen>0;
+              const covered=!!pool[sub.id];
               return `
               <div class="sub-row">
-                <input type="checkbox" ${pool[sub.id]?'checked':''} onchange="togglePool('${sub.id}',this.checked)">
+                <input type="checkbox" ${covered?'checked':''} onchange="togglePool('${sub.id}',this.checked)">
                 <div style="flex:1">
                   <div style="font-size:12px;color:#8A93A2;font-weight:600;margin-bottom:1px">${sub.num}</div>
                   <div style="font-size:13px">${sub.name}</div>
                 </div>
-                <span style="font-size:11px;color:${studied?'#2E9C8E':'#B0B7C3'};flex-shrink:0;font-weight:600">${studied?'✓ studied':'unseen'}</span>
+                <span style="font-size:11px;color:${covered?'#2E9C8E':'#B0B7C3'};flex-shrink:0;font-weight:600">${covered?'✓ covered':'not yet'}</span>
               </div>`;
             }).join(''):''}
           </div>`;
