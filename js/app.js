@@ -329,7 +329,7 @@ function highlightR(code){
 // RENDER
 // ========================
 let paTimerInterval=null;
-function startPATimer(){if(!state.paStartTime){state.paStartTime=Date.now();}if(!paTimerInterval){paTimerInterval=setInterval(()=>{if(state.view==='practice'&&state.paStatus==='idle'){render();}else{clearInterval(paTimerInterval);paTimerInterval=null;}},1000);}}
+function startPATimer(){if(!state.paStartTime){state.paStartTime=Date.now();}if(!paTimerInterval){paTimerInterval=setInterval(()=>{if(state.view==='practice'&&state.paStatus==='idle'){if(state.module!=='CS1B')render();}else{clearInterval(paTimerInterval);paTimerInterval=null;}},1000);}}
 function stopPATimer(){clearInterval(paTimerInterval);paTimerInterval=null;state.paStartTime=null;}
 function fmtElapsed(ms){const s=Math.floor(ms/1000);const m=Math.floor(s/60);return m>0?`${m}m ${s%60}s`:`${s}s`;}
 function render(){
@@ -390,8 +390,8 @@ function render(){
     SYLLABUS.forEach(course=>course.topics.forEach(topic=>{
       const el=document.getElementById('tc-'+topic.id);
       if(el){
-        const pct=topicMastery(topic);
-        el.indeterminate=(pct>0&&pct<100);
+        const pooled=topic.subs.filter(s=>pool[s.id]).length;
+        el.indeterminate=(pooled>0&&pooled<topic.subs.length);
       }
     }));
   }
@@ -1218,11 +1218,12 @@ function renderProgress(){
       <div style="margin-top:12px">
         ${course.topics.map(topic=>{
           const topicPct=topicMastery(topic);
+          const topicPoolPct=topic.subs.length?Math.round(topic.subs.filter(s=>pool[s.id]).length/topic.subs.length*100):0;
           return `
           <div>
             <div class="topic-row${state.expandedTopics[topic.id]?' expanded':''}" onclick="toggleTopic('${topic.id}')">
               <span class="expand-caret" style="color:#8A93A2;font-size:12px">▶</span>
-              <input type="checkbox" ${topicPct===100?'checked':topicPct>0?'indeterminate-js':''} onclick="event.stopPropagation();toggleTopic_pool('${topic.id}',this.checked)" style="flex-shrink:0;width:16px;height:16px;cursor:pointer" id="tc-${topic.id}">
+              <input type="checkbox" ${topicPoolPct===100?'checked':topicPoolPct>0?'indeterminate-js':''} onclick="event.stopPropagation();toggleTopic_pool('${topic.id}',this.checked)" style="flex-shrink:0;width:16px;height:16px;cursor:pointer" id="tc-${topic.id}">
               <div style="flex:1">
                 <div style="font-size:13.5px;font-weight:600">${topic.name} <span style="color:#8A93A2;font-weight:400">[${topic.w}%]</span></div>
                 <div style="font-size:11.5px;color:#8A93A2;margin-top:2px">${topic.subs.length} subtopics</div>
