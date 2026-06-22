@@ -33,7 +33,7 @@ let state = {
   view:'home',
   variant:1,
   module:'ALL',
-  fcIndex:0, fcFlipped:false, fcDeck:[], fcWeakQueue:[], fcReviewRound:false,
+  fcIndex:0, fcFlipped:false, fcDeck:[], fcWeakQueue:[], fcReviewRound:false, fcTotalReviewed:0,
   paIndex:0, paText:'', paStatus:'idle', paVerdict:null, paScore:0, paDeck:[], paWeakQueue:[], paReviewRound:false, paStartTime:null, aiMarking:false, paAIFeedback:'',
   taskDone:[true,false,false],
   rStatus:'idle', rIndex:0, rCode:null, rRan:false, rRunning:false, rOutput:[], rImages:[], rEnv:[], showHint:false, showModel:false,
@@ -344,6 +344,7 @@ function render(){
         ${renderView()}
       </div>
     </div>
+    ${renderMobileNav()}
     ${state.addingTo!==null?renderAddModal():''}
     ${state.showKeyModal?renderAIKeyModal():''}
   `;
@@ -410,14 +411,30 @@ function updateLineNums(code){
   gutter.innerHTML=Array.from({length:lines},(_,i)=>`<span class="rs-gutter-num">${i+1}</span>`).join('');
 }
 
+const NAV_VIEWS=[
+  {id:'home',label:'Dashboard',icon:`<svg width="18" height="18" viewBox="0 0 20 20" fill="none"><rect x="3" y="3" width="6" height="6" rx="1.6" fill="currentColor"/><rect x="11" y="3" width="6" height="6" rx="1.6" fill="currentColor" opacity=".4"/><rect x="3" y="11" width="6" height="6" rx="1.6" fill="currentColor" opacity=".4"/><rect x="11" y="11" width="6" height="6" rx="1.6" fill="currentColor"/></svg>`},
+  {id:'planner',label:'Planner',icon:`<svg width="18" height="18" viewBox="0 0 20 20" fill="none"><rect x="3" y="4.5" width="14" height="12.5" rx="2.4" stroke="currentColor" stroke-width="1.7"/><path d="M3 8h14M7 3v3M13 3v3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>`},
+  {id:'flashcards',label:'Flashcards',icon:`<svg width="18" height="18" viewBox="0 0 20 20" fill="none"><rect x="5" y="5.5" width="12" height="9" rx="2.2" stroke="currentColor" stroke-width="1.7"/><path d="M3.4 8v6a2 2 0 0 0 2 2h7.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" opacity=".45"/></svg>`},
+  {id:'practice',label:'Practice',icon:`<svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M5.5 3.5h9a1.5 1.5 0 0 1 1.5 1.5v10a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 4 15V5a1.5 1.5 0 0 1 1.5-1.5Z" stroke="currentColor" stroke-width="1.7"/><path d="M7 8h6M7 11h4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>`},
+  {id:'progress',label:'Progress',icon:`<svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M4 16V9M10 16V4M16 16v-4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>`},
+];
+
+function renderMobileNav(){
+  const now=new Date();now.setHours(0,0,0,0);
+  const badge=CARDS.filter(c=>pool[c.sub]).filter(c=>{const m=mastery[c.sub];return !m?.nextReview||new Date(m.nextReview)<=now;}).length;
+  return `<nav class="mobile-nav">
+    ${NAV_VIEWS.map(v=>`<div class="mobile-nav-item${state.view===v.id?' active':''}" onclick="go('${v.id}')">
+      <div style="position:relative;display:flex;align-items:center;justify-content:center">
+        ${v.icon}
+        ${v.id==='flashcards'&&badge>0?`<span class="mobile-nav-badge">${badge}</span>`:''}
+      </div>
+      <span>${v.id==='home'?'Home':v.id==='flashcards'?'Cards':v.label}</span>
+    </div>`).join('')}
+  </nav>`;
+}
+
 function renderSidebar(){
-  const views=[
-    {id:'home',label:'Dashboard',icon:`<svg width="18" height="18" viewBox="0 0 20 20" fill="none"><rect x="3" y="3" width="6" height="6" rx="1.6" fill="currentColor"/><rect x="11" y="3" width="6" height="6" rx="1.6" fill="currentColor" opacity=".4"/><rect x="3" y="11" width="6" height="6" rx="1.6" fill="currentColor" opacity=".4"/><rect x="11" y="11" width="6" height="6" rx="1.6" fill="currentColor"/></svg>`},
-    {id:'planner',label:'Planner',icon:`<svg width="18" height="18" viewBox="0 0 20 20" fill="none"><rect x="3" y="4.5" width="14" height="12.5" rx="2.4" stroke="currentColor" stroke-width="1.7"/><path d="M3 8h14M7 3v3M13 3v3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>`},
-    {id:'flashcards',label:'Flashcards',icon:`<svg width="18" height="18" viewBox="0 0 20 20" fill="none"><rect x="5" y="5.5" width="12" height="9" rx="2.2" stroke="currentColor" stroke-width="1.7"/><path d="M3.4 8v6a2 2 0 0 0 2 2h7.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" opacity=".45"/></svg>`},
-    {id:'practice',label:'Practice',icon:`<svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M5.5 3.5h9a1.5 1.5 0 0 1 1.5 1.5v10a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 4 15V5a1.5 1.5 0 0 1 1.5-1.5Z" stroke="currentColor" stroke-width="1.7"/><path d="M7 8h6M7 11h4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>`},
-    {id:'progress',label:'Progress',icon:`<svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M4 16V9M10 16V4M16 16v-4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>`},
-  ];
+  const views=NAV_VIEWS;
   const d=daysToExam();
   // QW-3: count SM-2 due cards for badge
   const _sidebarNow=new Date();_sidebarNow.setHours(0,0,0,0);
@@ -760,6 +777,7 @@ function renderFlashcards(){
     <span><strong style="color:#3D6FD1">${_fcDueToday}</strong> due today</span>
     <span style="color:#D0D5DE">·</span>
     <span><strong style="color:#1B2330">${_fcUpcoming}</strong> upcoming</span>
+    ${state.module!=='ALL'?`<span style="color:#D0D5DE">·</span><span style="font-size:11px;opacity:.8">${state.module} only</span>`:''}
   </div>`}
   <div class="flex items-center justify-between mb-20">
     <div class="text-sm text-secondary">${idx+1} of ${cards.length} cards</div>
@@ -801,7 +819,7 @@ function renderFCComplete(total){
   return `<div class="card" style="text-align:center;padding:60px 40px;max-width:500px;margin:0 auto">
     <div style="font-size:40px;margin-bottom:16px">🎉</div>
     <div style="font-size:20px;font-weight:700;margin-bottom:8px">Deck complete!</div>
-    <div class="text-sm text-secondary mb-24">You reviewed all ${total} cards. Great work!</div>
+    <div class="text-sm text-secondary mb-24">You reviewed all ${state.fcTotalReviewed} cards. Great work!</div>
     <div class="flex gap-12" style="justify-content:center">
       <button class="btn btn-ghost" onclick="resetFC()">Review again</button>
       <button class="btn btn-primary" onclick="go('practice')">Try practice Qs</button>
@@ -1298,7 +1316,7 @@ function avgMastery(course){
 // ========================
 window.go=function(view){
   state.view=view;
-  if(view==='flashcards'){state.fcIndex=0;state.fcFlipped=false;state.fcWeakQueue=[];state.fcReviewRound=false;buildDecks();}
+  if(view==='flashcards'){state.fcIndex=0;state.fcFlipped=false;state.fcWeakQueue=[];state.fcReviewRound=false;state.fcTotalReviewed=0;buildDecks();}
   if(view==='practice'){
     state.paIndex=0;state.paText='';state.paStatus='idle';state.paVerdict=null;state.paScore=0;state.paWeakQueue=[];state.paReviewRound=false;state.paPreview=false;
     stopPATimer();buildDecks();startPATimer();
@@ -1324,16 +1342,19 @@ window.setModule=function(mod){
 };
 
 window.flipCard=function(){
+  if(state.fcIndex>=filteredCards().length)return;
   state.fcFlipped=!state.fcFlipped;
   render();
 };
 
 window.rateCard=function(rating){
   const cards=filteredCards();
+  if(state.fcIndex>=cards.length)return;
   const card=cards[state.fcIndex];
   if(card){
     recordCardRating(card.sub, rating);
     if(rating==='again'||rating==='hard') state.fcWeakQueue.push(card);
+    state.fcTotalReviewed++;
   }
   state.fcIndex++;
   state.fcFlipped=false;
@@ -1347,7 +1368,7 @@ window.rateCard=function(rating){
 };
 
 window.resetFC=function(){
-  state.fcIndex=0;state.fcFlipped=false;state.fcWeakQueue=[];state.fcReviewRound=false;buildDecks();
+  state.fcIndex=0;state.fcFlipped=false;state.fcWeakQueue=[];state.fcReviewRound=false;state.fcTotalReviewed=0;buildDecks();
   render();
 };
 

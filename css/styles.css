@@ -215,6 +215,18 @@ label.form-label{font-size:12.5px;color:#8A93A2;font-weight:500;display:block;ma
 /* Week nav */
 .week-nav-btn{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:8px;border:1px solid #E8EBF0;background:#fff;cursor:pointer;font-size:16px;color:#8A93A2;transition:all .15s}
 .week-nav-btn:hover{background:#F5F6F8;color:#1B2330}
+/* Mobile bottom nav */
+.mobile-nav{display:none}
+@media(max-width:640px){
+  .sidebar{display:none}
+  .main{padding-bottom:68px}
+  .topbar{padding:12px 16px}
+  .page-content{padding:16px}
+  .mobile-nav{display:flex;position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid #E8EBF0;z-index:200;padding-bottom:env(safe-area-inset-bottom,0px)}
+  .mobile-nav-item{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 4px;cursor:pointer;color:#8A93A2;font-size:9.5px;font-weight:500;user-select:none;position:relative}
+  .mobile-nav-item.active{color:#3D6FD1}
+  .mobile-nav-badge{position:absolute;top:3px;right:50%;transform:translateX(12px);background:#C94040;color:#fff;font-size:8px;font-weight:700;padding:1px 4px;border-radius:8px;min-width:14px;text-align:center;line-height:1.6}
+}
 </style>
 </head>
 <body>
