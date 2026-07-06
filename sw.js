@@ -1,5 +1,6 @@
-// Tabula service worker — cache-first for app shell, network-first for CDN assets
-const CACHE = 'tabula-v1';
+// Tabula service worker — network-first everywhere so updates deploy immediately;
+// cache is the offline fallback
+const CACHE = 'tabula-v2';
 const SHELL = [
   '/',
   '/index.html',
@@ -24,14 +25,14 @@ self.addEventListener('activate', e => {
 
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
-  // Cache-first for same-origin shell assets
+  // Network-first for same-origin shell assets — cache the fresh copy for offline use
   if (url.origin === location.origin) {
     e.respondWith(
-      caches.match(e.request).then(cached => cached || fetch(e.request).then(res => {
+      fetch(e.request).then(res => {
         const clone = res.clone();
         caches.open(CACHE).then(c => c.put(e.request, clone));
         return res;
-      }))
+      }).catch(() => caches.match(e.request))
     );
     return;
   }

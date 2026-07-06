@@ -303,34 +303,42 @@ async function initWebR(){
   render();
 }
 
-// Highlight R syntax
+// Highlight R syntax — single pass over the escaped source so later rules can
+// never re-match HTML injected by earlier ones (e.g. digits inside hex colors)
+const R_KEYWORDS=new Set(['if','else','for','while','function','return','TRUE','FALSE','NULL','NA','Inf','NaN','in','repeat','break','next']);
+const R_FNS=new Set(['c','sum','mean','sd','var','lm','glm','summary','coef','print','cat','paste','paste0','data.frame','factor','log','exp','sqrt','abs','round','length','nrow','ncol','head','tail','plot','hist','data','library','require','cbind','rbind','seq','rep','which','max','min','range','table','as.numeric','as.character','as.factor','rnorm','rpois','dnorm','pnorm','qnorm','dbinom','pbinom','t.test','cor','predict','residuals','fitted','abline','lines','points','legend','barplot','boxplot','qqnorm','qqline','anova','aov','step','AIC','BIC','confint','quantile','apply','sapply','lapply','tapply','aggregate','matrix','rgamma','dgamma','pgamma','qgamma','rexp','dexp','pexp','qexp','rbinom','qbinom','optim','nlm','integrate','set.seed','sample','sort','order','rev','unique','cumsum','prod','choose','gamma','beta','ifelse']);
 function highlightR(code){
   if(!code)return '';
-  const keywords=['if','else','for','while','function','return','TRUE','FALSE','NULL','NA','Inf','NaN','in','repeat','break','next'];
-  const fns=['c','sum','mean','sd','var','lm','glm','summary','coef','print','cat','paste','paste0','data.frame','factor','log','exp','sqrt','abs','round','length','nrow','ncol','head','tail','plot','hist','data','library','require','cbind','rbind','seq','rep','which','max','min','range','table','as.numeric','as.character','as.factor','rnorm','rpois','dnorm','pnorm','qnorm','dbinom','pbinom','t.test','cor','predict','residuals','fitted'];
-  let h=code.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  // strings
-  h=h.replace(/(["'])(?:(?=(\\?))\2.)*?\1/g,m=>`<span style="color:#A6E3A1">${m}</span>`);
-  // comments
-  h=h.replace(/(#[^\n]*)/g,m=>`<span style="color:#6C7086">${m}</span>`);
-  // numbers
-  h=h.replace(/\b(\d+\.?\d*)\b/g,m=>`<span style="color:#FAB387">${m}</span>`);
-  // keywords
-  keywords.forEach(kw=>{
-    h=h.replace(new RegExp(`\\b(${kw})\\b`,'g'),`<span style="color:#CBA6F7">$1</span>`);
+  const h=code.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const tokenRe=/("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(#[^\n]*)|(\b\d+(?:\.\d+)?\b)|(\b[A-Za-z._][A-Za-z0-9._]*\b)/g;
+  return h.replace(tokenRe,(m,str,com,num,id,offset,src)=>{
+    if(str)return `<span style="color:#A6E3A1">${str}</span>`;
+    if(com)return `<span style="color:#6C7086">${com}</span>`;
+    if(num)return `<span style="color:#FAB387">${num}</span>`;
+    if(R_KEYWORDS.has(id))return `<span style="color:#CBA6F7">${id}</span>`;
+    if(R_FNS.has(id)&&/^\s*\(/.test(src.slice(offset+id.length)))return `<span style="color:#89DCEB">${id}</span>`;
+    return m;
   });
-  // functions
-  fns.forEach(fn=>{
-    h=h.replace(new RegExp(`\\b(${fn})(?=\\s*\\()`,'g'),`<span style="color:#89DCEB">$1</span>`);
-  });
-  return h;
 }
 
 // ========================
 // RENDER
 // ========================
 let paTimerInterval=null;
-function startPATimer(){if(!state.paStartTime){state.paStartTime=Date.now();}if(!paTimerInterval){paTimerInterval=setInterval(()=>{if(state.view==='practice'&&state.paStatus==='idle'){if(state.module!=='CS1B')render();}else{clearInterval(paTimerInterval);paTimerInterval=null;}},1000);}}
+function startPATimer(){if(!state.paStartTime){state.paStartTime=Date.now();}if(!paTimerInterval){paTimerInterval=setInterval(()=>{if(state.view==='practice'&&state.paStatus==='idle'){if(state.module!=='CS1B')tickPATimer();}else{clearInterval(paTimerInterval);paTimerInterval=null;}},1000);}}
+// Update timer displays in place — a full render() here would destroy the
+// answer textarea and steal focus mid-keystroke
+function tickPATimer(){
+  const el=document.getElementById('pa-elapsed');
+  if(el&&state.paStartTime)el.textContent='⏱ '+fmtElapsed(Date.now()-state.paStartTime);
+  const cd=document.getElementById('pa-countdown');
+  if(cd&&!state.examMode&&state.paQStartTime&&state.paQDuration){
+    const rem=Math.max(0,state.paQDuration-Math.floor((Date.now()-state.paQStartTime)/1000));
+    const pct=(state.paQDuration-rem)/state.paQDuration;
+    cd.style.color=pct>=0.8?'#C94040':pct>=0.5?'#C97B30':'#2E9C8E';
+    cd.textContent=`${Math.floor(rem/60)}:${String(rem%60).padStart(2,'0')} left`;
+  }
+}
 function stopPATimer(){clearInterval(paTimerInterval);paTimerInterval=null;state.paStartTime=null;}
 function fmtElapsed(ms){const s=Math.floor(ms/1000);const m=Math.floor(s/60);return m>0?`${m}m ${s%60}s`:`${s}s`;}
 function render(){
@@ -795,11 +803,11 @@ function renderFlashcards(){
       <span class="badge" style="background:${card.color}18;color:${card.color}">${card.topic}</span>
     </div>
     ${!state.fcFlipped
-      ?`<div class="fc-q">${card.q}</div><div class="fc-flip-hint">Click to reveal answer</div>`
+      ?`<div class="fc-q">${renderMd(card.q,!card.ai)}</div><div class="fc-flip-hint">Click to reveal answer</div>`
       :`<span style="font-size:13px;font-weight:600;color:#8A93A2;display:block;margin-bottom:10px">Answer</span>
-        <div class="fc-q mb-12" style="font-size:15px;color:#8A93A2">${card.q}</div>
+        <div class="fc-q mb-12" style="font-size:15px;color:#8A93A2">${renderMd(card.q,!card.ai)}</div>
         <div style="width:48px;height:2px;background:#E8EBF0;margin:12px auto"></div>
-        <div class="fc-a">${card.a}</div>`
+        <div class="fc-a">${renderMd(card.a,!card.ai)}</div>`
     }
   </div>
 
@@ -883,8 +891,8 @@ function renderWrittenPractice(){
   <div class="flex items-center justify-between mb-20">
     <div class="flex items-center gap-12">
       <div class="text-sm text-secondary">Question ${idx+1} of ${qs.length}</div>
-      ${state.paStartTime?`<div class="text-sm text-secondary" style="font-variant-numeric:tabular-nums">⏱ ${fmtElapsed(Date.now()-state.paStartTime)}</div>`:''}
-      ${_qRem!==null?`<span style="font-size:12px;font-weight:600;color:${_qColor};font-variant-numeric:tabular-nums">${_qFmt} left</span>`:''}
+      ${state.paStartTime?`<div class="text-sm text-secondary" id="pa-elapsed" style="font-variant-numeric:tabular-nums">⏱ ${fmtElapsed(Date.now()-state.paStartTime)}</div>`:''}
+      ${_qRem!==null?`<span id="pa-countdown" style="font-size:12px;font-weight:600;color:${_qColor};font-variant-numeric:tabular-nums">${_qFmt} left</span>`:''}
     </div>
     <div class="flex items-center gap-8">
       ${q.ai?`<span class="badge" style="background:#ECF1FB;color:#3D6FD1">✨ AI</span>`:''}
@@ -897,7 +905,7 @@ function renderWrittenPractice(){
 
   <div class="card mb-16">
     <div class="text-xs text-secondary mb-8" style="font-weight:600;text-transform:uppercase;letter-spacing:.06em">${q.topic}</div>
-    <div class="pa-stem">${q.ai?renderMd(q.stem):q.stem}</div>
+    <div class="pa-stem">${renderMd(q.stem,!q.ai)}</div>
   </div>
 
   ${state.paStatus==='idle'||state.paStatus==='answering'?`
@@ -924,7 +932,7 @@ function renderWrittenPractice(){
 
   <div class="card mb-16" style="border-left:3px solid #3D6FD1">
     <div style="font-size:13px;font-weight:600;color:#3D6FD1;margin-bottom:10px">Model answer</div>
-    <div style="font-size:14px;line-height:1.7">${q.ai?renderMd(q.model):q.model}</div>
+    <div style="font-size:14px;line-height:1.7">${renderMd(q.model,!q.ai)}</div>
   </div>
 
   <div class="card">
@@ -958,12 +966,12 @@ function renderWrittenPractice(){
   </div>
   <div class="card mb-16" style="border-left:3px solid #3D6FD1">
     <div style="font-size:13px;font-weight:600;color:#3D6FD1;margin-bottom:10px">Model answer</div>
-    <div style="font-size:14px;line-height:1.7">${q.ai?renderMd(q.model):q.model}</div>
+    <div style="font-size:14px;line-height:1.7">${renderMd(q.model,!q.ai)}</div>
   </div>
   ${state.paAIFeedback?`
   <div class="card mb-16" style="border-left:3px solid #6B5DD3">
     <div style="font-size:13px;font-weight:600;color:#6B5DD3;margin-bottom:8px">✨ AI feedback</div>
-    <div style="font-size:14px;line-height:1.7">${escHtml(state.paAIFeedback)}</div>
+    <div style="font-size:14px;line-height:1.7">${renderMd(state.paAIFeedback)}</div>
   </div>`:''}
   <div class="flex items-center justify-between">
     <div class="flex items-center gap-8">
@@ -1055,7 +1063,7 @@ function renderRPractice(){
     <div class="flex items-center justify-between mb-8">
       <div class="text-xs text-secondary" style="font-weight:600;text-transform:uppercase;letter-spacing:.06em">${rq.topic}</div>
     </div>
-    <div class="pa-stem">${rq.ai?renderMd(rq.prompt):rq.prompt}</div>
+    <div class="pa-stem">${renderMd(rq.prompt,!rq.ai)}</div>
     ${isAI?`
     <div style="margin-top:14px;padding:10px 14px;background:#1E1E2E;border-radius:8px">
       <div class="text-xs" style="color:#6C7086;font-weight:600;margin-bottom:6px;font-family:'JetBrains Mono',monospace">SETUP CODE (auto-runs before your code)</div>
@@ -1337,7 +1345,7 @@ window.setModule=function(mod){
   buildDecks();
   if(mod==='CS1B'&&state.view==='practice') initWebR(); // QW-5: auto-init R
   // QW-7: start countdown for first written question
-  if(mod!=='CS1B'&&state.view==='practice'&&state.paDeck.length>0){state.paQStartTime=Date.now();state.paQDuration=Math.round(state.paDeck[0].marks*1.8)*60;}
+  if(mod!=='CS1B'&&state.view==='practice'&&state.paDeck.length>0){state.paQStartTime=Date.now();state.paQDuration=Math.round(state.paDeck[0].marks*1.8)*60;startPATimer();}
   render();
 };
 
@@ -1424,6 +1432,7 @@ window.nextPA=function(){
       state.paIndex=0;
       state.paStatus='idle';
       const _nq=filteredQuestions()[0];if(_nq){state.paQStartTime=Date.now();state.paQDuration=Math.round(_nq.marks*1.8)*60;} // QW-7
+      startPATimer(); // interval self-cleared on submit — restart it
     }else{
       state.paStatus='complete';
       state.paQStartTime=null;state.paQDuration=0; // QW-7
@@ -1431,6 +1440,7 @@ window.nextPA=function(){
   }else{
     state.paStatus='idle';
     const _nq2=filteredQuestions()[state.paIndex];if(_nq2){state.paQStartTime=Date.now();state.paQDuration=Math.round(_nq2.marks*1.8)*60;} // QW-7
+    startPATimer(); // interval self-cleared on submit — restart it
   }
   render();
 };
@@ -1515,8 +1525,7 @@ window.runRCode=async function(){
   state.rRunning=true;state.rOutput=[];state.rImages=[];state.rEnv=[];state.rRan=true;
   render();
   try{
-    await webR.evalR('webr::canvas(width=560,height=380)');
-    const result=await webRShelter.captureR(code,{withAutoprint:true,captureStreams:true,captureConditions:true});
+    const result=await webRShelter.captureR(code,{withAutoprint:true,captureStreams:true,captureConditions:true,captureGraphics:{width:560,height:380}});
     const output=[];
     for(const ev of result.output){
       if(ev.type==='stdout'||ev.type==='message') output.push({type:'out',text:ev.data});
@@ -1524,24 +1533,25 @@ window.runRCode=async function(){
     }
     if(output.length===0) output.push({type:'out',text:'Code ran with no output.'});
     state.rOutput=output;
-    // Flush device and capture plots
+    // captureGraphics returns plots as ImageBitmaps — draw to canvas for <img> display
     try{
-      await webR.evalR('try(grDevices::dev.off(),silent=TRUE)');
-      const imgs=await webR.evalR('webr::canvas_capture()');
-      const imgData=await imgs.toJs();
-      if(imgData&&imgData.values&&imgData.values.length>0){
-        state.rImages=imgData.values.filter(Boolean).map(v=>'data:image/png;base64,'+v);
+      if(result.images&&result.images.length>0){
+        state.rImages=result.images.map(img=>{
+          const cv=document.createElement('canvas');
+          cv.width=img.width;cv.height=img.height;
+          cv.getContext('2d').drawImage(img,0,0);
+          return cv.toDataURL('image/png');
+        });
       }
-    }catch(e){
-      state.rOutput.push({type:'error',text:'Plot capture error: '+String(e)});
-    }
+    }catch(e){}
     // Capture environment
     try{
       const envR=await webR.evalR(`
-        nms <- ls()
+      local({
+        nms <- ls(envir=globalenv())
         nms <- nms[!startsWith(nms,'.')]
         if(length(nms)==0) character(0) else sapply(nms, function(nm){
-          obj <- get(nm)
+          obj <- get(nm, envir=globalenv())
           tp <- class(obj)[1]
           vl <- tryCatch({
             if(is.data.frame(obj)) paste0(nrow(obj),' x ',ncol(obj),' [',paste(names(obj),collapse=', '),']')
@@ -1553,6 +1563,7 @@ window.runRCode=async function(){
           }, error=function(e) '?')
           paste0(nm,'|||',tp,'|||',vl)
         })
+      })
       `);
       const rows=await envR.toJs();
       if(rows&&rows.values&&rows.values.length>0){
@@ -1703,7 +1714,27 @@ function escHtml(s){
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-function renderMd(text){
+// Break inline "(1) … (2) …" and "(i) … (ii) …" enumerations onto separate lines.
+// Only fires when the first two markers both appear after a sentence boundary, so
+// notation like i^(p) and references like "shown in part (i)" are left alone.
+function splitEnums(h){
+  const numSig=/(^|[.:;\]!?]\s+)\(1\)\s/.test(h)&&/[.:;\]!?]\s+\(2\)\s/.test(h);
+  if(numSig){
+    h=h.replace(/(^|[.:;\]!?]\s+)\((\d{1,2})\)\s+/g,(m,pre,n)=>
+      pre.replace(/\s+$/,'')+(pre||n!=='1'?'<br>':'')+`<span style="font-weight:600;color:#3D6FD1">(${n})</span> `);
+  }
+  const romSig=/(^|[.:;\]!?]\s+)\(i\)\s/.test(h)&&/[.:;\]!?]\s+\(ii\)\s/.test(h);
+  if(romSig){
+    h=h.replace(/(^|[.:;\]!?]\s+)\(([ivx]{1,4})\)\s+/g,(m,pre,n)=>
+      pre.replace(/\s+$/,'')+(pre||n!=='i'?'<br>':'')+`<span style="font-weight:600;color:#3D6FD1">(${n})</span> `);
+  }
+  return h;
+}
+
+// plain=true: escape + enumeration/line formatting only, no markdown emphasis.
+// Static exam content uses bare * ^ _ as notation (e.g. "D* = D/(1+i)") which
+// markdown rules would corrupt — only AI-generated content gets full markdown.
+function renderMd(text,plain){
   if(!text)return '';
   // Split into math and non-math segments so math is never HTML-escaped
   const mathRe=/(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\))/g;
@@ -1719,10 +1750,13 @@ function renderMd(text){
   return segments.map(seg=>{
     if(seg.t==='math')return seg.v; // pass raw LaTeX to MathJax
     let h=escHtml(seg.v);
-    h=h.replace(/\*\*([^*\n]+)\*\*/g,'<strong>$1</strong>');
-    h=h.replace(/\*([^*\n]+)\*/g,'<em>$1</em>');
-    h=h.replace(/^###\s+(.+)$/gm,'<div style="font-weight:600;margin:10px 0 4px">$1</div>');
-    h=h.replace(/^##\s+(.+)$/gm,'<div style="font-weight:700;margin:12px 0 4px">$1</div>');
+    if(!plain){
+      h=h.replace(/\*\*([^*\n]+)\*\*/g,'<strong>$1</strong>');
+      h=h.replace(/\*([^*\n]+)\*/g,'<em>$1</em>');
+      h=h.replace(/^###\s+(.+)$/gm,'<div style="font-weight:600;margin:10px 0 4px">$1</div>');
+      h=h.replace(/^##\s+(.+)$/gm,'<div style="font-weight:700;margin:12px 0 4px">$1</div>');
+    }
+    h=splitEnums(h);
     h=h.replace(/^[-•]\s+(.+)$/gm,'<div style="display:flex;gap:6px;margin:3px 0"><span style="color:#3D6FD1;flex-shrink:0">•</span><span>$1</span></div>');
     h=h.replace(/^(\d+)\.\s+(.+)$/gm,'<div style="display:flex;gap:6px;margin:3px 0"><span style="color:#3D6FD1;font-weight:600;flex-shrink:0">$1.</span><span>$2</span></div>');
     h=h.replace(/\n\n+/g,'<br><br>');
