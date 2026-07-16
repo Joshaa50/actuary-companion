@@ -798,7 +798,7 @@ function renderFlashcards(){
     </div>
   </div>
 
-  <div class="fc-card mb-20" onclick="flipCard()">
+  <div class="fc-card mb-20" style="border-top:4px solid ${card.color}" onclick="flipCard()">
     <div style="margin-bottom:12px">
       <span class="badge" style="background:${card.color}18;color:${card.color}">${card.topic}</span>
     </div>
@@ -806,7 +806,7 @@ function renderFlashcards(){
       ?`<div class="fc-q">${renderMd(card.q,!card.ai)}</div><div class="fc-flip-hint">Click to reveal answer</div>`
       :`<span style="font-size:13px;font-weight:600;color:#8A93A2;display:block;margin-bottom:10px">Answer</span>
         <div class="fc-q mb-12" style="font-size:15px;color:#8A93A2">${renderMd(card.q,!card.ai)}</div>
-        <div style="width:48px;height:2px;background:#E8EBF0;margin:12px auto"></div>
+        <div style="width:48px;height:3px;border-radius:2px;background:${card.color}55;margin:14px 0"></div>
         <div class="fc-a">${renderMd(card.a,!card.ai)}</div>`
     }
   </div>
@@ -903,8 +903,8 @@ function renderWrittenPractice(){
     </div>
   </div>
 
-  <div class="card mb-16">
-    <div class="text-xs text-secondary mb-8" style="font-weight:600;text-transform:uppercase;letter-spacing:.06em">${q.topic}</div>
+  <div class="card mb-16 stem-card" style="border-left:4px solid ${q.chip}">
+    <div class="text-xs mb-8" style="font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:${q.chip}">${q.topic}</div>
     <div class="pa-stem">${renderMd(q.stem,!q.ai)}</div>
   </div>
 
@@ -915,7 +915,7 @@ function renderWrittenPractice(){
       <button class="btn btn-ghost btn-sm" onclick="togglePAPreview()">${state.paPreview?'✏ Edit':'👁 Preview'}</button>
     </div>
     ${state.paPreview
-      ?`<div id="pa-preview" style="font-size:14px;line-height:1.7;padding:12px;background:#F8F9FB;border-radius:8px;min-height:120px">${state.paText?renderMd(state.paText):'<span style="color:#8A93A2">Nothing to preview yet</span>'}</div>`
+      ?`<div id="pa-preview" class="rd" style="padding:12px 14px;background:#F8F9FB;border-radius:8px;min-height:120px">${state.paText?renderMd(state.paText):'<span style="color:#8A93A2">Nothing to preview yet</span>'}</div>`
       :`<textarea id="pa-answer" rows="7" placeholder="Write your answer here… (use $…$ for inline LaTeX)" oninput="state.paText=this.value">${escHtml(state.paText)}</textarea>`
     }
     <div class="flex items-center justify-between" style="margin-top:12px">
@@ -927,12 +927,12 @@ function renderWrittenPractice(){
   ${state.paStatus==='submitted'?`
   <div class="card mb-16" id="pa-result">
     <div style="font-size:13px;font-weight:600;margin-bottom:10px">Your answer</div>
-    <div style="font-size:14px;line-height:1.7;color:#1B2330;padding:12px;background:#F8F9FB;border-radius:8px;white-space:pre-wrap">${escHtml(state.paText)||'<span style="color:#8A93A2">No answer written</span>'}</div>
+    <div class="rd" style="padding:12px 14px;background:#F8F9FB;border-radius:8px;white-space:pre-wrap">${escHtml(state.paText)||'<span style="color:#8A93A2">No answer written</span>'}</div>
   </div>
 
   <div class="card mb-16" style="border-left:3px solid #3D6FD1">
     <div style="font-size:13px;font-weight:600;color:#3D6FD1;margin-bottom:10px">Model answer</div>
-    <div style="font-size:14px;line-height:1.7">${renderMd(q.model,!q.ai)}</div>
+    <div class="rd">${renderMd(q.model,!q.ai)}</div>
   </div>
 
   <div class="card">
@@ -962,16 +962,16 @@ function renderWrittenPractice(){
   ${state.paStatus==='graded'?`
   <div class="card mb-16">
     <div style="font-size:13px;font-weight:600;margin-bottom:10px">Your answer</div>
-    <div style="font-size:14px;line-height:1.7;color:#1B2330;padding:12px;background:#F8F9FB;border-radius:8px;white-space:pre-wrap">${escHtml(state.paText)||'<span style="color:#8A93A2">No answer written</span>'}</div>
+    <div class="rd" style="padding:12px 14px;background:#F8F9FB;border-radius:8px;white-space:pre-wrap">${escHtml(state.paText)||'<span style="color:#8A93A2">No answer written</span>'}</div>
   </div>
   <div class="card mb-16" style="border-left:3px solid #3D6FD1">
     <div style="font-size:13px;font-weight:600;color:#3D6FD1;margin-bottom:10px">Model answer</div>
-    <div style="font-size:14px;line-height:1.7">${renderMd(q.model,!q.ai)}</div>
+    <div class="rd">${renderMd(q.model,!q.ai)}</div>
   </div>
   ${state.paAIFeedback?`
   <div class="card mb-16" style="border-left:3px solid #6B5DD3">
     <div style="font-size:13px;font-weight:600;color:#6B5DD3;margin-bottom:8px">✨ AI feedback</div>
-    <div style="font-size:14px;line-height:1.7">${renderMd(state.paAIFeedback)}</div>
+    <div class="rd">${renderMd(state.paAIFeedback)}</div>
   </div>`:''}
   <div class="flex items-center justify-between">
     <div class="flex items-center gap-8">
@@ -1059,9 +1059,9 @@ function renderRPractice(){
     </div>
   </div>
 
-  <div class="card mb-16">
+  <div class="card mb-16 stem-card" style="border-left:4px solid #2E9C8E">
     <div class="flex items-center justify-between mb-8">
-      <div class="text-xs text-secondary" style="font-weight:600;text-transform:uppercase;letter-spacing:.06em">${rq.topic}</div>
+      <div class="text-xs" style="font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#2E9C8E">${rq.topic}</div>
     </div>
     <div class="pa-stem">${renderMd(rq.prompt,!rq.ai)}</div>
     ${isAI?`
@@ -1176,7 +1176,7 @@ function renderRPractice(){
   ${state.showHint?`
   <div class="card mb-12" style="border-left:3px solid #C97B30">
     <div style="font-size:13px;font-weight:600;color:#C97B30;margin-bottom:8px">Hint</div>
-    <div style="font-size:13.5px;line-height:1.7">${escHtml(rq.hint)}</div>
+    <div class="rd">${escHtml(rq.hint)}</div>
   </div>`:''}
 
   ${state.showModel?`
@@ -1715,27 +1715,115 @@ function escHtml(s){
 }
 
 // Break inline "(1) … (2) …" and "(i) … (ii) …" enumerations onto separate lines.
+// Runs on RAW text using sentinel chars (\x01 = line break, \x02…\x03 = marker span)
+// so markers survive the math-segment split; sentinels become HTML after escaping.
 // Only fires when the first two markers both appear after a sentence boundary, so
 // notation like i^(p) and references like "shown in part (i)" are left alone.
-function splitEnums(h){
-  const numSig=/(^|[.:;\]!?]\s+)\(1\)\s/.test(h)&&/[.:;\]!?]\s+\(2\)\s/.test(h);
+function markEnums(text){
+  const numSig=/(^|[.:;\]!?]\s+)\(1\)\s/.test(text)&&/[.:;\]!?]\s+\(2\)\s/.test(text);
   if(numSig){
-    h=h.replace(/(^|[.:;\]!?]\s+)\((\d{1,2})\)\s+/g,(m,pre,n)=>
-      pre.replace(/\s+$/,'')+(pre||n!=='1'?'<br>':'')+`<span style="font-weight:600;color:#3D6FD1">(${n})</span> `);
+    text=text.replace(/(^|[.:;\]!?]\s+)\((\d{1,2})\)\s+/g,(m,pre,n)=>
+      pre.replace(/\s+$/,'')+(pre?' ':'')+(pre||n!=='1'?'\x01':'')+'\x02('+n+')\x03 ');
   }
-  const romSig=/(^|[.:;\]!?]\s+)\(i\)\s/.test(h)&&/[.:;\]!?]\s+\(ii\)\s/.test(h);
+  const romSig=/(^|[.:;\]!?]\s+)\(i\)\s/.test(text)&&/[.:;\]!?]\s+\(ii\)\s/.test(text);
   if(romSig){
-    h=h.replace(/(^|[.:;\]!?]\s+)\(([ivx]{1,4})\)\s+/g,(m,pre,n)=>
-      pre.replace(/\s+$/,'')+(pre||n!=='i'?'<br>':'')+`<span style="font-weight:600;color:#3D6FD1">(${n})</span> `);
+    text=text.replace(/(^|[.:;\]!?]\s+)\(([ivx]{1,4})\)\s+/g,(m,pre,n)=>
+      pre.replace(/\s+$/,'')+(pre?' ':'')+(pre||n!=='i'?'\x01':'')+'\x02('+n+')\x03 ');
   }
-  return h;
+  return text;
 }
 
-// plain=true: escape + enumeration/line formatting only, no markdown emphasis.
+// ── Plain-text formula → LaTeX ──
+// Static content writes maths as unicode text ("δ = ln(1 + i)", "A_x = Σ v^{k+1} k|qₓ").
+// texifyMath detects maths-like token runs and converts them to \( … \) LaTeX for
+// MathJax. Strict rules keep prose and R code untouched: a run must be made of
+// maths tokens only (single letters, digits, operators, greek, known functions,
+// 2-4 letter acronyms) AND contain a trigger (relational op, ^ _ ∫ √ Σ, or
+// unicode sub/superscripts). "Duration of assets = duration of liabilities" and
+// "lm(y ~ x1 * x2)" fail these tests and stay as text.
+const TEX_FUNCS={ln:'\\ln',log:'\\log',exp:'\\exp',max:'\\max',min:'\\min',lim:'\\lim',Var:'\\operatorname{Var}',Cov:'\\operatorname{Cov}',Corr:'\\operatorname{Corr}',SD:'\\operatorname{SD}',MSE:'\\operatorname{MSE}',SE:'\\operatorname{SE}'};
+const TEX_DIFFS=new Set(['dt','dx','ds','dv','dr','dn','du','di']);
+const TEX_SUPS={'⁰':'0','¹':'1','²':'2','³':'3','⁴':'4','⁵':'5','⁶':'6','⁷':'7','⁸':'8','⁹':'9','ⁿ':'n','⁺':'+','⁻':'-','ᵀ':'T','ᵏ':'k'};
+const TEX_SUBS={'₀':'0','₁':'1','₂':'2','₃':'3','₄':'4','₅':'5','₆':'6','₇':'7','₈':'8','₉':'9','ₓ':'x','ₜ':'t','ₙ':'n','₊':'+','₋':'-'};
+const TEX_GREEK={'α':'\\alpha ','β':'\\beta ','γ':'\\gamma ','δ':'\\delta ','ε':'\\varepsilon ','ζ':'\\zeta ','η':'\\eta ','θ':'\\theta ','κ':'\\kappa ','λ':'\\lambda ','μ':'\\mu ','ν':'\\nu ','ξ':'\\xi ','π':'\\pi ','ρ':'\\rho ','σ':'\\sigma ','τ':'\\tau ','υ':'\\upsilon ','φ':'\\phi ','χ':'\\chi ','ψ':'\\psi ','ω':'\\omega ','Γ':'\\Gamma ','Δ':'\\Delta ','Θ':'\\Theta ','Λ':'\\Lambda ','Φ':'\\Phi ','Ψ':'\\Psi ','Ω':'\\Omega ','Σ':'\\sum ','Π':'\\prod '};
+const TEX_SYMS={'−':'-','–':'-','±':'\\pm ','·':'\\cdot ','×':'\\times ','≈':'\\approx ','≤':'\\le ','≥':'\\ge ','≠':'\\ne ','∝':'\\propto ','→':'\\to ','⇒':'\\Rightarrow ','∞':'\\infty ','∫':'\\int ','√':'\\surd ','∂':'\\partial ','∈':'\\in ','½':'\\tfrac{1}{2}','£':'\\pounds ','%':'\\%','&':'\\&','<':'\\lt ','>':'\\gt ','ä':'\\ddot{a}','′':"'"};
+const TEX_CHAR_RE=/^[A-Za-z0-9̂̄̅αβγδεζηθκλμνξπρστυφχψωΓΔΘΛΦΨΩΣΠ₀-₉ₓₜₙ₊₋⁰¹²³⁴⁵⁶⁷⁸⁹ⁿ⁺⁻ᵀᵏä=+\-*/^_(){}\[\]|.,:'′!<>≈≤≥≠∝→⇒∞∫√∂∈±½£%·×−–&]+$/;
+const TEX_TRIG=/[=≈≤≥≠∝<>±→]|[\^_]|[∫√Σ]|[₀-₉ₓₜₙ₊₋]|[⁰¹²³⁴⁵⁶⁷⁸⁹ⁿ⁺⁻ᵀᵏ]|[̂̄̅]/;
+function _texToken(tok){
+  if(!TEX_CHAR_RE.test(tok))return false;
+  if(/^[(\[]?(e\.g\.?|i\.e\.?|etc\.?|vs\.?|cf\.?)[,;:.)\]]*$/i.test(tok))return false;
+  const runs=tok.match(/[A-Za-z]{2,}/g)||[];
+  return runs.every(w=>TEX_FUNCS[w]!==undefined||TEX_DIFFS.has(w)||/^[A-Z]{2,4}$/.test(w));
+}
+function _texValid(s){
+  if(s.replace(/[\s().,;:'!]/g,'').length<2)return false;
+  if(!TEX_TRIG.test(s))return false;
+  // unbalanced braces make fatal TeX (unlike parens, which render fine)
+  if((s.match(/{/g)||[]).length!==(s.match(/}/g)||[]).length)return false;
+  const rm=s.match(/[=≈≤≥≠∝<>]/);
+  if(rm){
+    const i=s.indexOf(rm[0]);
+    const operand=/[A-Za-z0-9αβγδεζηθκλμνξπρστυφχψω]|[₀-₉ₓₜₙ]|[⁰¹²³⁴⁵⁶⁷⁸⁹ⁿ]/;
+    if(!operand.test(s.slice(0,i))||!operand.test(s.slice(i+1)))return false;
+  }else{
+    if(!/[A-Za-zαβγδεζηθκλμνξπρστυφχψω]/.test(s))return false;
+  }
+  return true;
+}
+function _toTex(s){
+  let t=s;
+  // words first: functions, differentials, acronyms → \text{}; combining marks
+  // before greek so \hat/\bar wrap the converted symbol
+  t=t.replace(/[A-Za-z]{2,}/g,w=>TEX_FUNCS[w]||(TEX_DIFFS.has(w)?'\\,'+w:'\\text{'+w+'}'));
+  // brace primed identifiers (q' → {q'}) so a following ^ isn't a double exponent
+  t=t.replace(/([A-Za-z])[′']/g,"{$1'}");
+  t=t.replace(/(.)̂/g,(m,c)=>'\\hat{'+(TEX_GREEK[c]?TEX_GREEK[c].trim():c)+'}');
+  t=t.replace(/(.)[̄̅]/g,(m,c)=>'\\bar{'+(TEX_GREEK[c]?TEX_GREEK[c].trim():c)+'}');
+  t=t.replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹ⁿ⁺⁻ᵀᵏ]+/g,(m,off)=>{
+    const v=m.split('').map(c=>TEX_SUPS[c]).join('');
+    const prev=off>0?t[off-1]:'';
+    return ((!prev||/[\s(=+*/·×,−-]/.test(prev))?'{}':'')+'^{'+v+'}';
+  });
+  t=t.replace(/[₀-₉ₓₜₙ₊₋]+/g,(m,off)=>{
+    const v=m.split('').map(c=>TEX_SUBS[c]).join('');
+    const prev=off>0?t[off-1]:'';
+    return ((!prev||/[\s(=+*/·×,−-]/.test(prev))?'{}':'')+'_{'+v+'}';
+  });
+  t=t.replace(/\^\(([^()]{1,10})\)/g,'^{($1)}');
+  t=t.replace(/_\(([^()]{1,10})\)/g,'_{($1)}');
+  t=t.replace(/[αβγδεζηθκλμνξπρστυφχψωΓΔΘΛΦΨΩΣΠ]/g,c=>TEX_GREEK[c]);
+  t=t.replace(/[−–±·×≈≤≥≠∝→⇒∞∫√∂∈½£%&<>ä′]/g,c=>TEX_SYMS[c]);
+  return t;
+}
+function texifyMath(text){
+  try{
+    const parts=text.split(/(\s+)/);
+    let out='',run='';
+    const flush=()=>{
+      if(!run)return;
+      const m=run.match(/^([\s\S]*?)([\s.,;:]*)$/);
+      const core=m[1],tail=m[2];
+      if(_texValid(core)) out+='\\('+_toTex(core)+'\\)'+tail;
+      else out+=run;
+      run='';
+    };
+    for(const p of parts){
+      if(/^\s+$/.test(p)){ if(run)run+=p; else out+=p; continue; }
+      if(p&&_texToken(p)){ run+=p; }
+      else { flush(); out+=p; }
+    }
+    flush();
+    return out;
+  }catch(e){ return text; }
+}
+
+// plain=true: escape + enumeration/formula formatting only, no markdown emphasis.
 // Static exam content uses bare * ^ _ as notation (e.g. "D* = D/(1+i)") which
 // markdown rules would corrupt — only AI-generated content gets full markdown.
 function renderMd(text,plain){
   if(!text)return '';
+  text=markEnums(text);
+  if(plain)text=texifyMath(text);
   // Split into math and non-math segments so math is never HTML-escaped
   const mathRe=/(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\))/g;
   const segments=[];
@@ -1750,13 +1838,13 @@ function renderMd(text,plain){
   return segments.map(seg=>{
     if(seg.t==='math')return seg.v; // pass raw LaTeX to MathJax
     let h=escHtml(seg.v);
+    h=h.replace(/\x01/g,'<br>').replace(/\x02/g,'<span style="font-weight:600;color:#3D6FD1">').replace(/\x03/g,'</span>');
     if(!plain){
       h=h.replace(/\*\*([^*\n]+)\*\*/g,'<strong>$1</strong>');
       h=h.replace(/\*([^*\n]+)\*/g,'<em>$1</em>');
       h=h.replace(/^###\s+(.+)$/gm,'<div style="font-weight:600;margin:10px 0 4px">$1</div>');
       h=h.replace(/^##\s+(.+)$/gm,'<div style="font-weight:700;margin:12px 0 4px">$1</div>');
     }
-    h=splitEnums(h);
     h=h.replace(/^[-•]\s+(.+)$/gm,'<div style="display:flex;gap:6px;margin:3px 0"><span style="color:#3D6FD1;flex-shrink:0">•</span><span>$1</span></div>');
     h=h.replace(/^(\d+)\.\s+(.+)$/gm,'<div style="display:flex;gap:6px;margin:3px 0"><span style="color:#3D6FD1;font-weight:600;flex-shrink:0">$1.</span><span>$2</span></div>');
     h=h.replace(/\n\n+/g,'<br><br>');
