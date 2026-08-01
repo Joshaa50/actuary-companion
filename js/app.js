@@ -158,6 +158,12 @@ function computeOverallMastery(){
   return Math.round(allSubs.reduce((a,id)=>a+subMastery(id),0)/allSubs.length);
 }
 
+// True once the student has actually studied something. Gates the "overdue"
+// and "weak area" panels so a brand-new user isn't told they're already behind
+// on day one — progress is still tracked from the very first card/question.
+function totalCardsSeen(){return Object.values(mastery).reduce((a,m)=>a+(m.seen||0),0);}
+function hasStudied(){return totalCardsSeen()>0 || (studyStats.writtenAnswered||0)>0;}
+
 // Compute mastery for a module from card rating history (unseen subtopics count as 0%)
 function moduleCardMastery(modId){
   const subs=[...new Set(CARDS.filter(c=>c.module===modId).map(c=>c.sub))];
@@ -539,7 +545,28 @@ function renderView(){
 // ========================
 // HOME
 // ========================
+// First-run getting-started panel. Shown until the student logs their first
+// activity, then it's replaced by the real progress/overdue widgets.
+function renderWelcome(){
+  return `
+  <div class="card mb-16" style="border:1px solid #D6E0F5;background:linear-gradient(180deg,#F7FAFF,#FFFFFF)">
+    <div style="font-size:18px;font-weight:700;margin-bottom:4px">👋 Welcome to Tabula</div>
+    <div style="font-size:13.5px;color:#616B7A;line-height:1.6;margin-bottom:16px">
+      Your actuarial study companion. Nothing's overdue and nothing's weak yet — this
+      is a clean slate. Start a session and your streak, mastery and weak areas will
+      build automatically from here.
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px">
+      <button class="btn btn-primary" onclick="go('flashcards')">Start flashcards</button>
+      <button class="btn btn-ghost" onclick="go('practice')">Try a written question</button>
+      <button class="btn btn-ghost" onclick="go('progress')">Choose your topics</button>
+    </div>
+    <div style="font-size:12px;color:#8A93A2;margin-top:14px">${CARDS.length} flashcards ready · ${daysToExam()} days to your exam</div>
+  </div>`;
+}
+
 function renderHome(){
+  const firstRun=!hasStudied();
   const todayDi=(new Date().getDay()+6)%7;
   const wc=studyStats.weekCards||[0,0,0,0,0,0,0];
   const maxCards=Math.max(...wc,1);
@@ -552,7 +579,7 @@ function renderHome(){
   const totalReviewed=Object.values(mastery).reduce((a,v)=>a+v.seen,0);
 
   return `
-  ${renderOverdueAlerts()}
+  ${firstRun ? renderWelcome() : renderOverdueAlerts()}
   <div class="grid-4 mb-16">
     ${statCard(dueCount,'Cards in pool','Across all modules')}
     ${statCard(overallMastPct+'%','Overall mastery','Based on card ratings')}
@@ -560,7 +587,7 @@ function renderHome(){
     ${statCard(daysToExam()+'d','To exam',formatExamDate(state.examDate))}
   </div>
   <div class="kb-hint" style="text-align:right;margin-top:-8px;margin-bottom:12px"><span class="kb-key">S</span> Start studying</div>
-  ${renderDangerZone()}
+  ${firstRun ? '' : renderDangerZone()}
 
   <div class="grid-2 mb-24">
     <div class="card">
@@ -2127,24 +2154,31 @@ window.triggerImport = function() {
 // DANGER ZONE + OVERDUE ALERTS
 // ========================
 function renderDangerZone() {
+  // Weak areas are judged only from topics the student has actually attempted.
+  // Unseen topics aren't "weak" — they're just not started yet — so they never
+  // appear here. Only genuinely low-scoring studied topics get flagged, which
+  // keeps day one clean while still surfacing real gaps as they build up.
+  const WEAK_PCT = 60; // studied topics scoring below this are flagged
   const rows = [];
   SYLLABUS.forEach(course => {
     course.topics.forEach(topic => {
       topic.subs.forEach(sub => {
         if (!pool[sub.id]) return;
         const m = mastery[sub.id];
-        const pct = m && m.seen > 0 ? Math.round(m.good / m.seen * 100) : (m ? 0 : -1);
-        rows.push({id: sub.id, name: sub.name, num: sub.num, course: course.code, color: course.color, pct, seen: m?.seen || 0});
+        if (!m || m.seen < 1) return;            // only judge what's been studied
+        const pct = Math.round(m.good / m.seen * 100);
+        if (pct >= WEAK_PCT) return;             // strong enough → not a weak area
+        rows.push({id: sub.id, name: sub.name, num: sub.num, course: course.code, color: course.color, pct, seen: m.seen});
       });
     });
   });
-  rows.sort((a,b) => (a.pct === -1 ? -999 : a.pct) - (b.pct === -1 ? -999 : b.pct));
+  if (rows.length === 0) return '';
+  rows.sort((a,b) => a.pct - b.pct);
   const weakest = rows.slice(0, 5);
-  if (weakest.length === 0) return '';
   return `
   <div class="card mb-16">
     <div class="flex items-center justify-between mb-12">
-      <div style="font-size:14px;font-weight:600;color:#C94040">⚠ Danger Zone — 5 weakest sub-topics</div>
+      <div style="font-size:14px;font-weight:600;color:#C94040">⚠ Weak areas — focus here${weakest.length>1?' ('+weakest.length+')':''}</div>
       <button class="btn btn-ghost btn-sm" onclick="go('progress')">All progress →</button>
     </div>
     ${weakest.map(s => `
@@ -2152,7 +2186,7 @@ function renderDangerZone() {
         <span class="badge" style="background:${s.color}18;color:${s.color};font-size:10px;flex-shrink:0;white-space:nowrap">${s.course} ${s.num}</span>
         <div style="flex:1;font-size:12.5px;line-height:1.3;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">${escHtml(s.name)}</div>
         <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
-          <span style="font-size:13px;font-weight:700;color:${s.pct < 0 ? '#6B7280' : s.pct < 40 ? '#C94040' : '#C97B30'}">${s.pct < 0 ? 'Unseen' : s.pct + '%'}</span>
+          <span style="font-size:13px;font-weight:700;color:${s.pct < 40 ? '#C94040' : '#C97B30'}">${s.pct}%</span>
           <span style="font-size:11px;color:#616B7A">▶</span>
         </div>
       </div>`).join('')}
@@ -2217,6 +2251,10 @@ window.autoSuggestPlan = function() {
 };
 
 function renderOverdueAlerts() {
+  // Only surface topics the student has actually studied and then let go stale.
+  // Never-seen topics are NOT "overdue" — flagging the whole syllabus on day one
+  // is what made the app feel like you were already behind. New material is
+  // simply waiting in the normal flashcard queue instead.
   const now = Date.now();
   const overdue = [];
   SYLLABUS.forEach(course => {
@@ -2224,7 +2262,8 @@ function renderOverdueAlerts() {
       topic.subs.forEach(sub => {
         if (!pool[sub.id]) return;
         const m = mastery[sub.id];
-        const days = m?.lastSeen ? Math.floor((now - new Date(m.lastSeen).getTime()) / 86400000) : 999;
+        if (!m || !m.lastSeen) return; // never studied → not overdue
+        const days = Math.floor((now - new Date(m.lastSeen).getTime()) / 86400000);
         if (days >= 14) overdue.push({name: sub.name, course: course.code, color: course.color, days, id: sub.id});
       });
     });
@@ -2239,7 +2278,7 @@ function renderOverdueAlerts() {
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
         <span class="badge" style="background:${t.color}18;color:${t.color};font-size:10px;flex-shrink:0">${t.course}</span>
         <span style="font-size:12.5px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(t.name)}</span>
-        <span style="font-size:11.5px;color:#C94040;flex-shrink:0;font-weight:600">${t.days >= 999 ? 'Never' : t.days + 'd ago'}</span>
+        <span style="font-size:11.5px;color:#C94040;flex-shrink:0;font-weight:600">${t.days}d ago</span>
       </div>`).join('')}
     <button class="btn btn-sm" style="background:#FEE2DC;color:#C94040;border:none;margin-top:8px" onclick="go('flashcards')">Review now →</button>
   </div>`;
