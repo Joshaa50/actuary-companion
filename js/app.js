@@ -341,6 +341,15 @@ function tickPATimer(){
 }
 function stopPATimer(){clearInterval(paTimerInterval);paTimerInterval=null;state.paStartTime=null;}
 function fmtElapsed(ms){const s=Math.floor(ms/1000);const m=Math.floor(s/60);return m>0?`${m}m ${s%60}s`:`${s}s`;}
+// render() rebuilds app.innerHTML, so the .main scroll container is recreated and
+// scroll jumps to the top. For in-place edits (ticking a subtopic, expanding a
+// row) capture the scroll offset and restore it after the rebuild.
+function renderKeepScroll(){
+  const y=document.querySelector('.main')?.scrollTop||0;
+  render();
+  const nm=document.querySelector('.main');
+  if(nm)nm.scrollTop=y;
+}
 function render(){
   const app=document.getElementById('app');
   if(!app)return;
@@ -803,11 +812,11 @@ function renderFlashcards(){
       <span class="badge" style="background:${card.color}18;color:${card.color}">${card.topic}</span>
     </div>
     ${!state.fcFlipped
-      ?`<div class="fc-q">${renderMd(card.q,!card.ai)}</div><div class="fc-flip-hint">Click to reveal answer</div>`
+      ?`<div class="fc-q">${renderMd(card.q,!card.ai,'lines')}</div><div class="fc-flip-hint">Click to reveal answer</div>`
       :`<span style="font-size:13px;font-weight:600;color:#8A93A2;display:block;margin-bottom:10px">Answer</span>
-        <div class="fc-q mb-12" style="font-size:15px;color:#8A93A2">${renderMd(card.q,!card.ai)}</div>
+        <div class="fc-q mb-12" style="font-size:15px;color:#8A93A2">${renderMd(card.q,!card.ai,'lines')}</div>
         <div style="width:48px;height:3px;border-radius:2px;background:${card.color}55;margin:14px 0"></div>
-        <div class="fc-a">${renderMd(card.a,!card.ai)}</div>`
+        <div class="fc-a">${renderMd(card.a,!card.ai,'bullets')}</div>`
     }
   </div>
 
@@ -905,7 +914,7 @@ function renderWrittenPractice(){
 
   <div class="card mb-16 stem-card" style="border-left:4px solid ${q.chip}">
     <div class="text-xs mb-8" style="font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:${q.chip}">${q.topic}</div>
-    <div class="pa-stem">${renderMd(q.stem,!q.ai)}</div>
+    <div class="pa-stem">${renderMd(q.stem,!q.ai,'lines')}</div>
   </div>
 
   ${state.paStatus==='idle'||state.paStatus==='answering'?`
@@ -932,7 +941,7 @@ function renderWrittenPractice(){
 
   <div class="card mb-16" style="border-left:3px solid #3D6FD1">
     <div style="font-size:13px;font-weight:600;color:#3D6FD1;margin-bottom:10px">Model answer</div>
-    <div class="rd">${renderMd(q.model,!q.ai)}</div>
+    <div class="rd">${renderMd(q.model,!q.ai,'bullets')}</div>
   </div>
 
   <div class="card">
@@ -966,7 +975,7 @@ function renderWrittenPractice(){
   </div>
   <div class="card mb-16" style="border-left:3px solid #3D6FD1">
     <div style="font-size:13px;font-weight:600;color:#3D6FD1;margin-bottom:10px">Model answer</div>
-    <div class="rd">${renderMd(q.model,!q.ai)}</div>
+    <div class="rd">${renderMd(q.model,!q.ai,'bullets')}</div>
   </div>
   ${state.paAIFeedback?`
   <div class="card mb-16" style="border-left:3px solid #6B5DD3">
@@ -1063,7 +1072,7 @@ function renderRPractice(){
     <div class="flex items-center justify-between mb-8">
       <div class="text-xs" style="font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#2E9C8E">${rq.topic}</div>
     </div>
-    <div class="pa-stem">${renderMd(rq.prompt,!rq.ai)}</div>
+    <div class="pa-stem">${renderMd(rq.prompt,!rq.ai,'lines')}</div>
     ${isAI?`
     <div style="margin-top:14px;padding:10px 14px;background:#1E1E2E;border-radius:8px">
       <div class="text-xs" style="color:#6C7086;font-weight:600;margin-bottom:6px;font-family:'JetBrains Mono',monospace">SETUP CODE (auto-runs before your code)</div>
@@ -1176,7 +1185,7 @@ function renderRPractice(){
   ${state.showHint?`
   <div class="card mb-12" style="border-left:3px solid #C97B30">
     <div style="font-size:13px;font-weight:600;color:#C97B30;margin-bottom:8px">Hint</div>
-    <div class="rd">${escHtml(rq.hint)}</div>
+    <div class="rd">${renderMd(rq.hint,true,'lines')}</div>
   </div>`:''}
 
   ${state.showModel?`
@@ -1598,7 +1607,7 @@ window.nextRQ=function(){
 
 window.toggleTopic=function(id){
   state.expandedTopics[id]=!state.expandedTopics[id];
-  render();
+  renderKeepScroll();
 };
 
 window.toggleCourse=function(code){
@@ -1614,14 +1623,14 @@ window.toggleTopic_pool=function(topicId, val){
   topic.subs.forEach(s=>{ pool[s.id]=val; });
   savePool();
   invalidateDecks();
-  render();
+  renderKeepScroll();
 };
 
 window.togglePool=function(id,val){
   pool[id]=val;
   savePool();
   invalidateDecks();
-  render();
+  renderKeepScroll();
 };
 
 window.poolAll=function(val){
@@ -1733,6 +1742,19 @@ function markEnums(text){
   return text;
 }
 
+// Break paragraphs into one sentence per chunk (\x04 = bullet item, \x01 = plain
+// line break). Runs on RAW text after markEnums so enum items keep their own
+// markers; abbreviations and decimals are protected; next sentence must start
+// with a capital/digit/maths symbol so lowercase continuations stay joined.
+function chunkSentences(text,mode){
+  const mark=mode==='bullets'?'\x04':'\x01';
+  return text.replace(/([.!?])(\s+)(?=[A-Z0-9£("Α-Ωα-ω₀-₉ₓⁿ¹²³∫Σ√])/g,(m,p,sp,off,str)=>{
+    const before=str.slice(Math.max(0,off-7),off+1);
+    if(/(e\.g\.|i\.e\.|etc\.|vs\.|cf\.|approx\.)$/i.test(before))return m;
+    return p+' '+mark+' ';
+  });
+}
+
 // ── Plain-text formula → LaTeX ──
 // Static content writes maths as unicode text ("δ = ln(1 + i)", "A_x = Σ v^{k+1} k|qₓ").
 // texifyMath detects maths-like token runs and converts them to \( … \) LaTeX for
@@ -1820,10 +1842,18 @@ function texifyMath(text){
 // plain=true: escape + enumeration/formula formatting only, no markdown emphasis.
 // Static exam content uses bare * ^ _ as notation (e.g. "D* = D/(1+i)") which
 // markdown rules would corrupt — only AI-generated content gets full markdown.
-function renderMd(text,plain){
+// chunk ('bullets'|'lines') breaks plain content into one sentence per line;
+// AI content structures itself with markdown so chunk is ignored when !plain.
+function renderMd(text,plain,chunk){
   if(!text)return '';
+  // Shield escaped \$ (e.g. R list-access model$coef) so paired $ are never
+  // mis-read as MathJax inline-math delimiters; restored to a literal $ at the end
+  text=text.replace(/\\\$/g,'\x05');
   text=markEnums(text);
-  if(plain)text=texifyMath(text);
+  if(plain){
+    if(chunk)text=chunkSentences(text,chunk);
+    text=texifyMath(text);
+  }
   // Split into math and non-math segments so math is never HTML-escaped
   const mathRe=/(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\))/g;
   const segments=[];
@@ -1835,10 +1865,9 @@ function renderMd(text,plain){
   }
   if(last<text.length)segments.push({t:'text',v:text.slice(last)});
 
-  return segments.map(seg=>{
+  let html=segments.map(seg=>{
     if(seg.t==='math')return seg.v; // pass raw LaTeX to MathJax
     let h=escHtml(seg.v);
-    h=h.replace(/\x01/g,'<br>').replace(/\x02/g,'<span style="font-weight:600;color:#3D6FD1">').replace(/\x03/g,'</span>');
     if(!plain){
       h=h.replace(/\*\*([^*\n]+)\*\*/g,'<strong>$1</strong>');
       h=h.replace(/\*([^*\n]+)\*/g,'<em>$1</em>');
@@ -1851,6 +1880,15 @@ function renderMd(text,plain){
     h=h.replace(/\n/g,'<br>');
     return h;
   }).join('');
+  // Sentinels are resolved after joining so enum markers, line breaks and
+  // bullet items can wrap around \( … \) math segments without fragmenting
+  html=html.replace(/\x01/g,'<br>').replace(/\x02/g,'<span style="font-weight:600;color:#3D6FD1">').replace(/\x03/g,'</span>');
+  if(html.includes('\x04')){
+    html='<div class="rd-li">'+html.replace(/\x04/g,'</div><div class="rd-li">')+'</div>';
+  }
+  // emit \$ so MathJax's processEscapes renders a literal $ instead of a delimiter
+  html=html.replace(/\x05/g,'\\$');
+  return html;
 }
 
 // ========================

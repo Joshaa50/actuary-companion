@@ -92,6 +92,10 @@ textarea:focus{border-color:#3D6FD1;box-shadow:0 0 0 3px rgba(61,111,209,0.12)}
 .rd em,.fc-a em,.pa-stem em{font-style:normal;font-weight:600;color:#3D6FD1}
 /* Cream question card with module-colour accent (set inline per module) */
 .stem-card{background:#FDFAF2;border-color:#EDE6D4}
+/* Sentence-per-bullet chunks in answers (dyslexia-friendly short lines) */
+.rd-li{position:relative;padding-left:18px;margin:5px 0}
+.rd-li::before{content:'•';position:absolute;left:2px;color:#3D6FD1;font-weight:700}
+.rd-li:empty{display:none}
 /* Inline formulas get a soft blue chip so maths stands apart from prose */
 mjx-container:not([display="true"]){background:#EDF3FD;padding:1px 5px;border-radius:5px}
 mjx-container[display="true"]{background:#EDF3FD;padding:8px 12px;border-radius:8px;overflow-x:auto}
