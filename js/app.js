@@ -47,7 +47,27 @@ let state = {
   planWeekOffset:0,
   drillSub: null,
   examMode:false, examModeEnd:null,
+  theme:'auto',
 };
+
+// ---- Theme / dark mode (client-side only) ----
+function loadTheme(){try{return localStorage.getItem('tabula_theme_v1')||'auto';}catch(e){return 'auto';}}
+function themeIsDark(t){return t==='dark'||(t==='auto'&&window.matchMedia&&matchMedia('(prefers-color-scheme:dark)').matches);}
+function applyTheme(t){
+  const root=document.documentElement;
+  if(t==='auto')root.removeAttribute('data-theme'); else root.setAttribute('data-theme',t);
+  const meta=document.querySelector('meta[name=theme-color]');
+  if(meta)meta.setAttribute('content',themeIsDark(t)?'#12161C':'#3D6FD1');
+}
+window.cycleTheme=function(){
+  const order=['auto','light','dark'];
+  state.theme=order[(order.indexOf(state.theme)+1)%3];
+  try{localStorage.setItem('tabula_theme_v1',state.theme);}catch(e){}
+  applyTheme(state.theme);
+  render();
+  showToast('Theme: '+state.theme);
+};
+function themeIcon(t){return t==='dark'?'🌙':t==='light'?'☀️':'🌗';}
 
 // Pool (checked subtopic ids)
 function loadPool(){
@@ -119,6 +139,8 @@ function recordCardRating(subId, rating){
   const di=(new Date().getDay()+6)%7;
   studyStats.weekCards[di]=(studyStats.weekCards[di]||0)+1;
   saveStudyStats();
+  recordDailySnapshot();
+  checkMilestones();
 }
 
 // Study statistics (streak, daily card count, written questions answered)
@@ -128,6 +150,96 @@ function loadStudyStats(){
 }
 function saveStudyStats(){localStorage.setItem('tabula_stats_v1',JSON.stringify(studyStats));}
 let studyStats=loadStudyStats();
+
+// ============================================================
+// ENHANCEMENTS (all client-side — no backend, single device)
+// ============================================================
+
+// --- Long-term trend history: one snapshot per calendar day ---
+function loadHistory(){try{const s=localStorage.getItem('tabula_history_v1');if(s)return JSON.parse(s);}catch(e){}return [];}
+let studyHistory=loadHistory();
+function saveHistory(){try{localStorage.setItem('tabula_history_v1',JSON.stringify(studyHistory.slice(-180)));}catch(e){}}
+function recordDailySnapshot(){
+  const today=new Date().toISOString().slice(0,10);
+  const snap={date:today,mastery:computeOverallMastery(),reviewed:totalCardsSeen(),cards:studyStats.todayCards||0,readiness:examReadiness()};
+  const last=studyHistory[studyHistory.length-1];
+  if(last&&last.date===today)studyHistory[studyHistory.length-1]=snap;
+  else studyHistory.push(snap);
+  saveHistory();
+}
+
+// --- Milestones / badges ---
+const MILESTONES=[
+  {id:'first-card',name:'First card',icon:'🎯',test:()=>totalCardsSeen()>=1},
+  {id:'cards-50',name:'50 cards',icon:'🃏',test:()=>totalCardsSeen()>=50},
+  {id:'cards-250',name:'250 cards',icon:'📚',test:()=>totalCardsSeen()>=250},
+  {id:'cards-1000',name:'1,000 cards',icon:'🏆',test:()=>totalCardsSeen()>=1000},
+  {id:'streak-3',name:'3-day streak',icon:'🔥',test:()=>studyStats.streak>=3},
+  {id:'streak-7',name:'7-day streak',icon:'⚡',test:()=>studyStats.streak>=7},
+  {id:'streak-30',name:'30-day streak',icon:'🌟',test:()=>studyStats.streak>=30},
+  {id:'written-10',name:'10 written Qs',icon:'✍️',test:()=>(studyStats.writtenAnswered||0)>=10},
+  {id:'goal-hit',name:'Daily goal',icon:'✅',test:()=>state.dailyGoal>0&&(studyStats.todayCards||0)>=state.dailyGoal},
+  {id:'mastery-50',name:'Halfway there',icon:'📈',test:()=>computeOverallMastery()>=50},
+  {id:'mastery-80',name:'Exam ready',icon:'🎓',test:()=>computeOverallMastery()>=80},
+  {id:'module-80',name:'Module master',icon:'💎',test:()=>MODULES.some(m=>moduleCardMastery(m.id)>=80)},
+];
+function loadBadges(){try{const s=localStorage.getItem('tabula_badges_v1');if(s)return JSON.parse(s);}catch(e){}return {};}
+let badges=loadBadges();
+function saveBadges(){try{localStorage.setItem('tabula_badges_v1',JSON.stringify(badges));}catch(e){}}
+function checkMilestones(){
+  MILESTONES.forEach(ms=>{
+    if(!badges[ms.id]&&ms.test()){badges[ms.id]=new Date().toISOString();saveBadges();showToast(ms.icon+' '+ms.name+' unlocked!');}
+  });
+}
+
+// --- Exam readiness & pacing ---
+function poolCoveragePct(){
+  const pooled=CARDS.filter(c=>pool[c.sub]);
+  if(!pooled.length)return 0;
+  const seen=pooled.filter(c=>{const m=mastery[c.sub];return m&&m.seen>0;}).length;
+  return Math.round(seen/pooled.length*100);
+}
+function examReadiness(){
+  const cov=poolCoveragePct();
+  const mast=computeOverallMastery();
+  return Math.max(0,Math.min(100,Math.round(cov*0.4+mast*0.6)));
+}
+function cardsPerDayNeeded(){
+  const unseen=CARDS.filter(c=>pool[c.sub]).filter(c=>{const m=mastery[c.sub];return !m||m.seen<1;}).length;
+  return Math.ceil(unseen/Math.max(1,daysToExam()));
+}
+function daysSinceStudy(){
+  if(!studyStats.lastStudyDate)return 999;
+  const last=new Date(studyStats.lastStudyDate);const now=new Date();now.setHours(0,0,0,0);last.setHours(0,0,0,0);
+  return Math.round((now-last)/86400000);
+}
+
+// --- Data durability: backup age + persistent storage ---
+function loadLastBackup(){try{return +localStorage.getItem('tabula_lastbackup_v1')||0;}catch(e){return 0;}}
+function markBackup(){try{localStorage.setItem('tabula_lastbackup_v1',String(Date.now()));}catch(e){}}
+function daysSinceBackup(){const t=loadLastBackup();return t?Math.floor((Date.now()-t)/86400000):999;}
+
+// --- Calendar reminders (.ics) — the reliable no-backend way to get an
+//     iPhone notification: the OS Calendar/Reminders app does the alerting ---
+function icsEsc(s){return String(s).replace(/([\\,;])/g,'\\$1').replace(/\n/g,'\\n');}
+window.addStudyReminder=function(){
+  const pad=n=>String(n).padStart(2,'0');
+  const now=new Date();
+  const dtstamp=now.getUTCFullYear()+pad(now.getUTCMonth()+1)+pad(now.getUTCDate())+'T'+pad(now.getUTCHours())+pad(now.getUTCMinutes())+pad(now.getUTCSeconds())+'Z';
+  const start=now.getFullYear()+pad(now.getMonth()+1)+pad(now.getDate());
+  let ics='BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Tabula//Study//EN\r\nCALSCALE:GREGORIAN\r\n';
+  ics+='BEGIN:VEVENT\r\nUID:tabula-daily-'+start+'@tabula\r\nDTSTAMP:'+dtstamp+'\r\nDTSTART:'+start+'T180000\r\nDURATION:PT30M\r\nRRULE:FREQ=DAILY\r\nSUMMARY:'+icsEsc('📚 Tabula study session')+'\r\nDESCRIPTION:'+icsEsc('Daily actuarial revision — flashcards + practice')+'\r\nBEGIN:VALARM\r\nTRIGGER:PT0S\r\nACTION:DISPLAY\r\nDESCRIPTION:'+icsEsc('Time to study')+'\r\nEND:VALARM\r\nEND:VEVENT\r\n';
+  if(state.examDate){
+    const ex=state.examDate.replace(/-/g,'');
+    ics+='BEGIN:VEVENT\r\nUID:tabula-exam@tabula\r\nDTSTAMP:'+dtstamp+'\r\nDTSTART;VALUE=DATE:'+ex+'\r\nSUMMARY:'+icsEsc('🎓 IFoA exam day')+'\r\nBEGIN:VALARM\r\nTRIGGER:-P7D\r\nACTION:DISPLAY\r\nDESCRIPTION:'+icsEsc('Exam in one week')+'\r\nEND:VALARM\r\nEND:VEVENT\r\n';
+  }
+  ics+='END:VCALENDAR\r\n';
+  const blob=new Blob([ics],{type:'text/calendar'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');a.href=url;a.download='tabula-study-reminders.ics';document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),2000);
+  showToast('Reminder downloaded — open it to add to your calendar');
+};
 
 function showToast(msg){
   const t=document.createElement('div');
@@ -214,6 +326,11 @@ function saveExamDate(){localStorage.setItem('tabula_examdate_v1',JSON.stringify
   state.examDate=ed.examDate;
   state.dailyGoal=ed.dailyGoal;
   state.fcSessionSize=(typeof ed.sessionSize==='number'&&ed.sessionSize>0)?ed.sessionSize:null;
+  state.theme=loadTheme();applyTheme(state.theme);
+  if(window.matchMedia)matchMedia('(prefers-color-scheme:dark)').addEventListener('change',()=>{if(state.theme==='auto'){applyTheme('auto');render();}});
+  // Ask the browser to keep our localStorage from being evicted (no prompt on
+  // most mobile browsers) — the closest thing to durability without a server.
+  try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist();}catch(e){}
   state.planData=loadPlan();
   state.chipDone=loadChipDone();
   // One-time migration: copy any CS1B mastery stored under old bare IDs to cs1b-* IDs
@@ -271,6 +388,11 @@ function buildDecks(){
     const bDue=!bm?.nextReview||bNxt<=todaySM;
     if(aDue&&!bDue)return -1;
     if(!aDue&&bDue)return 1;
+    if(aDue&&bDue){
+      // Adaptive: among due cards, lead with your weakest (lowest mastery) topics
+      const dm=subMastery(a.sub)-subMastery(b.sub);
+      if(dm!==0)return dm;
+    }
     return aNxt-bNxt; // most overdue first when both due; soonest next when neither due
   });
   // Keep the full eligible list for the pool counters, then cap the active deck
@@ -399,7 +521,7 @@ function render(){
     app.innerHTML=`<div style="max-width:420px;margin:60px auto;padding:24px;text-align:center;font-family:'Lexend',sans-serif">
       <div style="font-size:34px;margin-bottom:12px">😵‍💫</div>
       <div style="font-size:17px;font-weight:700;margin-bottom:8px">Something went wrong on this screen</div>
-      <div style="font-size:14px;color:#616B7A;line-height:1.6;margin-bottom:20px">Your progress is saved. Try going back to the dashboard or reloading.</div>
+      <div style="font-size:14px;color:var(--t2);line-height:1.6;margin-bottom:20px">Your progress is saved. Try going back to the dashboard or reloading.</div>
       <button class="btn btn-primary" onclick="try{state.view='home';render()}catch(e){location.reload()}">Back to dashboard</button>
     </div>`;
     return;
@@ -507,13 +629,14 @@ function renderSidebar(){
     <div class="sidebar-bottom">
       <div class="exam-card mb-12">
         <div class="exam-card-label">Exam countdown</div>
-        <div class="exam-card-days">${d} <span style="font-size:14px;font-weight:500;color:#616B7A">days</span></div>
+        <div class="exam-card-days">${d} <span style="font-size:14px;font-weight:500;color:var(--t2)">days</span></div>
         <div class="exam-card-sub">${formatExamDate(state.examDate)}</div>
       </div>
       <div style="display:flex;gap:6px">
-        <button onclick="exportData()" style="flex:1;padding:7px 6px;border-radius:8px;border:1px solid #E8EBF0;background:#fff;font-size:11.5px;font-weight:600;color:#616B7A;cursor:pointer;font-family:inherit;display:flex;align-items:center;justify-content:center;gap:4px;transition:all .15s" onmouseover="this.style.background='#F5F6F8';this.style.color='#1B2330'" onmouseout="this.style.background='#fff';this.style.color='#616B7A'" title="Download a backup of all your progress">⬇ Backup</button>
-        <button onclick="triggerImport()" style="flex:1;padding:7px 6px;border-radius:8px;border:1px solid #E8EBF0;background:#fff;font-size:11.5px;font-weight:600;color:#616B7A;cursor:pointer;font-family:inherit;display:flex;align-items:center;justify-content:center;gap:4px;transition:all .15s" onmouseover="this.style.background='#F5F6F8';this.style.color='#1B2330'" onmouseout="this.style.background='#fff';this.style.color='#616B7A'" title="Restore progress from a backup file">⬆ Restore</button>
+        <button onclick="exportData()" style="flex:1;padding:7px 6px;border-radius:8px;border:1px solid var(--border);background:var(--s1);font-size:11.5px;font-weight:600;color:var(--t2);cursor:pointer;font-family:inherit;display:flex;align-items:center;justify-content:center;gap:4px;transition:all .15s" onmouseover="this.style.background='var(--s2)';this.style.color='var(--t1)'" onmouseout="this.style.background='var(--s1)';this.style.color='var(--t2)'" title="Download a backup of all your progress">⬇ Backup</button>
+        <button onclick="triggerImport()" style="flex:1;padding:7px 6px;border-radius:8px;border:1px solid var(--border);background:var(--s1);font-size:11.5px;font-weight:600;color:var(--t2);cursor:pointer;font-family:inherit;display:flex;align-items:center;justify-content:center;gap:4px;transition:all .15s" onmouseover="this.style.background='var(--s2)';this.style.color='var(--t1)'" onmouseout="this.style.background='var(--s1)';this.style.color='var(--t2)'" title="Restore progress from a backup file">⬆ Restore</button>
       </div>
+      <button onclick="addStudyReminder()" style="width:100%;margin-top:6px;padding:7px 6px;border-radius:8px;border:1px solid var(--border);background:var(--s1);font-size:11.5px;font-weight:600;color:var(--t2);cursor:pointer;font-family:inherit;display:flex;align-items:center;justify-content:center;gap:4px" title="Download a calendar file with a daily study reminder + your exam date">🔔 Add study reminder</button>
     </div>
   </div>`;
 }
@@ -533,6 +656,7 @@ function renderTopbar(){
       <div class="topbar-sub">${subs[state.view]||''}</div>
     </div>
     <div class="topbar-right" style="gap:12px">
+      <button class="btn btn-sm btn-ghost" onclick="cycleTheme()" title="Theme: ${state.theme} (tap to change)" aria-label="Change theme, currently ${state.theme}">${themeIcon(state.theme)}</button>
       ${state.view==='practice'?`<button class="btn btn-sm ${state.examMode?'btn-primary':'btn-ghost'}" onclick="toggleExamMode()" title="Timed exam mode (IFoA time limits)">${state.examMode?'⏱ End exam':'⏱ Exam mode'}</button>`:''}
       ${state.view==='flashcards'||state.view==='practice'?renderModulePills():''}
     </div>
@@ -570,9 +694,9 @@ function renderView(){
 // activity, then it's replaced by the real progress/overdue widgets.
 function renderWelcome(){
   return `
-  <div class="card mb-16" style="border:1px solid #D6E0F5;background:linear-gradient(180deg,#F7FAFF,#FFFFFF)">
+  <div class="card mb-16" style="border:1px solid var(--border);background:var(--tint-blue)">
     <div style="font-size:18px;font-weight:700;margin-bottom:4px">👋 Welcome to Tabula</div>
-    <div style="font-size:13.5px;color:#616B7A;line-height:1.6;margin-bottom:16px">
+    <div style="font-size:13.5px;color:var(--t2);line-height:1.6;margin-bottom:16px">
       Your actuarial study companion. Nothing's overdue and nothing's weak yet — this
       is a clean slate. Start a session and your streak, mastery and weak areas will
       build automatically from here.
@@ -582,7 +706,112 @@ function renderWelcome(){
       <button class="btn btn-ghost" onclick="go('practice')">Try a written question</button>
       <button class="btn btn-ghost" onclick="go('progress')">Choose your topics</button>
     </div>
-    <div style="font-size:12px;color:#8A93A2;margin-top:14px">${CARDS.length} flashcards ready · ${daysToExam()} days to your exam</div>
+    <div style="font-size:12px;color:var(--t3);margin-top:14px">${CARDS.length} flashcards ready · ${daysToExam()} days to your exam</div>
+  </div>`;
+}
+
+// Exam-readiness card: blends coverage + mastery, and tells you the cards/day
+// pace needed to see every topic before the exam.
+function renderReadiness(){
+  const r=examReadiness();
+  const cov=poolCoveragePct();
+  const mast=computeOverallMastery();
+  const need=cardsPerDayNeeded();
+  const goal=state.dailyGoal||0;
+  const col=r>=70?'#2E9C8E':r>=40?'#C97B30':'#C94040';
+  const circ=163.4;const fill=Math.round(r/100*circ*10)/10;
+  return `
+  <div class="card mb-16">
+    <div class="flex items-center justify-between mb-12">
+      <div style="font-size:14px;font-weight:600">Exam readiness</div>
+      <div class="text-xs text-secondary">${daysToExam()} days left</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+      <svg width="76" height="76" viewBox="0 0 60 60" style="flex-shrink:0">
+        <circle cx="30" cy="30" r="26" fill="none" style="stroke:var(--s2)" stroke-width="6"/>
+        <circle cx="30" cy="30" r="26" fill="none" stroke="${col}" stroke-width="6" stroke-linecap="round" stroke-dasharray="${fill} ${circ-fill}" transform="rotate(-90 30 30)"/>
+        <text x="30" y="34" text-anchor="middle" font-size="14" font-weight="700" style="fill:var(--t1)">${r}%</text>
+      </svg>
+      <div style="flex:1;min-width:180px">
+        <div style="display:flex;gap:18px;margin-bottom:8px">
+          <div><div class="text-xs text-secondary">Coverage</div><div style="font-size:15px;font-weight:700">${cov}%</div></div>
+          <div><div class="text-xs text-secondary">Mastery</div><div style="font-size:15px;font-weight:700">${mast}%</div></div>
+        </div>
+        <div style="font-size:12.5px;color:var(--t2)">
+          ${need>0?`~<strong style="color:var(--t1)">${need}</strong> new cards/day to see every topic before your exam.`:`You've seen every topic in your pool 🎉`}
+        </div>
+        ${need>goal&&need>0?`<button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="adjustGoalTo(${need})">Set daily goal to ${need}</button>`:need>0?`<div style="font-size:11.5px;color:#2E9C8E;font-weight:600;margin-top:6px">✓ Goal of ${goal}/day keeps you on pace</div>`:''}
+      </div>
+    </div>
+    <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
+      <button class="btn btn-ghost btn-sm" onclick="addStudyReminder()" title="Downloads a calendar file with a daily study reminder + your exam date">🔔 Add daily reminder to calendar</button>
+    </div>
+  </div>`;
+}
+
+// Gentle nudges: come-back-after-a-break, and back-up-your-data.
+function renderNudges(){
+  let out='';
+  const dsince=daysSinceStudy();
+  if(dsince>=2&&dsince<999){
+    out+=`<div class="card mb-16" style="border:1px solid var(--border);background:var(--tint-amber);display:flex;align-items:center;gap:12px">
+      <span style="font-size:22px">👋</span>
+      <div style="flex:1"><div style="font-size:13.5px;font-weight:600">Welcome back — it's been ${dsince} days</div><div style="font-size:12px;color:var(--t2)">A quick session keeps your memory and your streak alive.</div></div>
+      <button class="btn btn-primary btn-sm" onclick="go('flashcards')">Study now</button>
+    </div>`;
+  }
+  if(daysSinceBackup()>=14){
+    out+=`<div class="card mb-16" style="display:flex;align-items:center;gap:12px">
+      <span style="font-size:20px">💾</span>
+      <div style="flex:1"><div style="font-size:13.5px;font-weight:600">Back up your progress</div><div style="font-size:12px;color:var(--t2)">Your data lives only on this device — save a backup so a cleared cache can't wipe it.</div></div>
+      <button class="btn btn-ghost btn-sm" onclick="exportData()">Backup now</button>
+    </div>`;
+  }
+  return out;
+}
+
+// Mastery/readiness trend from the daily snapshots.
+function renderTrends(){
+  const h=studyHistory.slice(-30);
+  if(h.length<2)return `<div class="card mb-16"><div style="font-size:14px;font-weight:600;margin-bottom:6px">Progress over time</div><div class="text-sm text-secondary">Study on more than one day and your mastery trend will chart here.</div></div>`;
+  const W=560,H=120,pad=8;
+  const xs=i=>pad+i*((W-2*pad)/(h.length-1));
+  const ys=v=>H-pad-(v/100)*(H-2*pad);
+  const line=key=>h.map((s,i)=>`${i?'L':'M'}${xs(i).toFixed(1)},${ys(s[key]||0).toFixed(1)}`).join(' ');
+  const delta=(h[h.length-1].mastery||0)-(h[0].mastery||0);
+  return `
+  <div class="card mb-16">
+    <div class="flex items-center justify-between mb-12">
+      <div style="font-size:14px;font-weight:600">Progress over time</div>
+      <div class="text-xs" style="color:${delta>=0?'#2E9C8E':'#C94040'};font-weight:600">${delta>=0?'▲':'▼'} ${Math.abs(delta)}% mastery · ${h.length} days</div>
+    </div>
+    <svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="none" style="display:block;height:120px">
+      <path d="${line('readiness')}" fill="none" style="stroke:#C97B30" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0.55"/>
+      <path d="${line('mastery')}" fill="none" style="stroke:#3D6FD1" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <div style="display:flex;gap:16px;margin-top:8px;font-size:11.5px;color:var(--t2)">
+      <span><span style="display:inline-block;width:12px;height:3px;background:#3D6FD1;vertical-align:middle;border-radius:2px"></span> Mastery</span>
+      <span><span style="display:inline-block;width:12px;height:3px;background:#C97B30;vertical-align:middle;border-radius:2px"></span> Readiness</span>
+    </div>
+  </div>`;
+}
+
+// Local achievements — motivation without any social layer.
+function renderMilestones(){
+  const earned=MILESTONES.filter(m=>badges[m.id]).length;
+  return `
+  <div class="card mb-16">
+    <div class="flex items-center justify-between mb-12">
+      <div style="font-size:14px;font-weight:600">Milestones</div>
+      <div class="text-xs text-secondary">${earned} / ${MILESTONES.length} unlocked</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:8px">
+      ${MILESTONES.map(m=>{const got=!!badges[m.id];return `
+        <div style="text-align:center;padding:10px 6px;border:1px solid var(--border);border-radius:10px;opacity:${got?1:0.45};background:${got?'var(--tint-teal)':'transparent'}">
+          <div style="font-size:22px;filter:${got?'none':'grayscale(1)'}">${m.icon}</div>
+          <div style="font-size:11px;font-weight:600;margin-top:3px;color:var(--t1)">${m.name}</div>
+        </div>`;}).join('')}
+    </div>
   </div>`;
 }
 
@@ -600,7 +829,7 @@ function renderHome(){
   const totalReviewed=Object.values(mastery).reduce((a,v)=>a+v.seen,0);
 
   return `
-  ${firstRun ? renderWelcome() : renderOverdueAlerts()}
+  ${firstRun ? renderWelcome() : renderNudges()+renderOverdueAlerts()}
   <div class="grid-4 mb-16">
     ${statCard(dueCount,'Cards in pool','Across all modules')}
     ${statCard(overallMastPct+'%','Overall mastery','Based on card ratings')}
@@ -608,6 +837,7 @@ function renderHome(){
     ${statCard(daysToExam()+'d','To exam',formatExamDate(state.examDate))}
   </div>
   <div class="kb-hint" style="text-align:right;margin-top:-8px;margin-bottom:12px"><span class="kb-key">S</span> Start studying</div>
+  ${firstRun ? '' : renderReadiness()}
   ${firstRun ? '' : renderDangerZone()}
 
   <div class="grid-2 mb-24">
@@ -651,7 +881,7 @@ function renderHome(){
           </svg>
           <div style="flex:1">
             <div style="font-size:13px;font-weight:600;color:${nameColor}">${m.name}</div>
-            <div style="font-size:11.5px;color:#616B7A">${due>0?mast+'% mastery · '+due+' in pool':'not in pool'}</div>
+            <div style="font-size:11.5px;color:var(--t2)">${due>0?mast+'% mastery · '+due+' in pool':'not in pool'}</div>
           </div>
           ${due>0?`<span class="due-badge">${due}</span>`:''}
         </div>`;
@@ -733,7 +963,7 @@ function renderPlanner(){
     <div class="flex items-center gap-12">
       <div>
         <label class="form-label">Exam date</label>
-        <input type="date" value="${state.examDate}" onchange="setExamDate(this.value)" style="font-family:inherit;font-size:13px;border:1px solid #E8EBF0;border-radius:8px;padding:6px 10px;color:#1B2330;background:#fff;outline:none">
+        <input type="date" value="${state.examDate}" onchange="setExamDate(this.value)" style="font-family:inherit;font-size:13px;border:1px solid var(--border);border-radius:8px;padding:6px 10px;color:var(--t1);background:var(--s1);outline:none">
       </div>
       <div>
         <label class="form-label">Daily goal (cards)</label>
@@ -847,23 +1077,23 @@ function renderFlashcards(){
   const _fcLeft=Math.max(0,cards.length-idx); // remaining in this session — ticks every card
 
   return `
-  ${state.fcReviewRound?`<div style="background:#FDF7F0;border:1px solid #F0C080;border-radius:10px;padding:10px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px">
+  ${state.fcReviewRound?`<div style="background:var(--tint-amber);border:1px solid #F0C080;border-radius:10px;padding:10px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px">
     <span style="font-size:16px">🔁</span>
     <div>
       <div style="font-size:13px;font-weight:600;color:#C97B30">Review round — cards you found difficult</div>
-      <div style="font-size:12px;color:#616B7A">${cards.length} card${cards.length!==1?'s':''} to retry</div>
+      <div style="font-size:12px;color:var(--t2)">${cards.length} card${cards.length!==1?'s':''} to retry</div>
     </div>
-  </div>`:`<div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;padding:8px 14px;background:#F5F6F8;border-radius:8px;margin-bottom:14px;font-size:12.5px;color:#616B7A">
+  </div>`:`<div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;padding:8px 14px;background:var(--s2);border-radius:8px;margin-bottom:14px;font-size:12.5px;color:var(--t2)">
     <span><strong style="color:#3D6FD1">${_fcLeft}</strong> left</span>
     <span style="color:#D0D5DE">·</span>
-    <span><strong style="color:#1B2330">${_fcDueToday}</strong> due today</span>
+    <span><strong style="color:var(--t1)">${_fcDueToday}</strong> due today</span>
     <span style="color:#D0D5DE">·</span>
-    <span><strong style="color:#1B2330">${_fcUpcoming}</strong> upcoming</span>
+    <span><strong style="color:var(--t1)">${_fcUpcoming}</strong> upcoming</span>
     ${state.module!=='ALL'?`<span style="color:#D0D5DE">·</span><span style="font-size:11px;opacity:.8">${state.module} only</span>`:''}
     <span style="margin-left:auto;display:flex;align-items:center;gap:6px" title="Cards per session before the review round — changing restarts this session">
       <span style="font-size:11px;opacity:.85">Session</span>
       <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="adjustSessionSize(-5)" aria-label="Fewer cards per session">−</button>
-      <strong style="min-width:22px;text-align:center;color:#1B2330" aria-live="polite">${fcSessionCap()}</strong>
+      <strong style="min-width:22px;text-align:center;color:var(--t1)" aria-live="polite">${fcSessionCap()}</strong>
       <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="adjustSessionSize(5)" aria-label="More cards per session">+</button>
     </span>
   </div>`}
@@ -874,6 +1104,7 @@ function renderFlashcards(){
         <circle cx="30" cy="30" r="26" fill="none" stroke="#F0F2F6" stroke-width="4"/>
         <circle cx="30" cy="30" r="26" fill="none" stroke="${state.fcReviewRound?'#C97B30':'#3D6FD1'}" stroke-width="4" stroke-linecap="round" stroke-dasharray="${prog} ${circ-prog}"/>
       </svg>
+      ${state.fcUndo?`<button class="btn btn-ghost btn-sm" onclick="undoRating()" title="Undo your last rating">↩ Undo</button>`:''}
       <button class="btn btn-ghost btn-sm" onclick="resetFC()">Restart</button>
     </div>
   </div>
@@ -884,8 +1115,8 @@ function renderFlashcards(){
     </div>
     ${!state.fcFlipped
       ?`<div class="fc-q">${renderMd(card.q,!card.ai,'lines')}</div><div class="fc-flip-hint">Click to reveal answer</div>`
-      :`<span style="font-size:13px;font-weight:600;color:#616B7A;display:block;margin-bottom:10px">Answer</span>
-        <div class="fc-q mb-12" style="font-size:15px;color:#616B7A">${renderMd(card.q,!card.ai,'lines')}</div>
+      :`<span style="font-size:13px;font-weight:600;color:var(--t2);display:block;margin-bottom:10px">Answer</span>
+        <div class="fc-q mb-12" style="font-size:15px;color:var(--t2)">${renderMd(card.q,!card.ai,'lines')}</div>
         <div style="width:48px;height:3px;border-radius:2px;background:${card.color}55;margin:14px 0"></div>
         <div class="fc-a">${renderMd(card.a,!card.ai,'bullets')}</div>`
     }
@@ -917,7 +1148,7 @@ function renderFCComplete(total){
       ${dueLeft>0?`${dueLeft} card${dueLeft!==1?'s':''} still due in your pool`:`You're all caught up for today 🎯`}
     </div>
     <div style="display:flex;align-items:center;justify-content:center;gap:6px;margin-bottom:20px" title="Cards per session">
-      <span style="font-size:12px;color:#616B7A">Cards per session</span>
+      <span style="font-size:12px;color:var(--t2)">Cards per session</span>
       <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="adjustSessionSize(-5)" aria-label="Fewer cards per session">−</button>
       <strong style="min-width:22px;text-align:center" aria-live="polite">${cap}</strong>
       <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="adjustSessionSize(5)" aria-label="More cards per session">+</button>
@@ -969,17 +1200,17 @@ function renderWrittenPractice(){
   <div class="flex items-center justify-between mb-16">
     <div class="flex items-center gap-8">
       ${state.aiGenerating
-        ?`<span class="badge" style="background:#ECF1FB;color:#3D6FD1">✨ Generating question…</span>`
+        ?`<span class="badge" style="background:var(--tint-blue);color:#3D6FD1">✨ Generating question…</span>`
         :`<button class="btn btn-ghost btn-sm" onclick="generateWrittenQ()" style="gap:5px">✨ Generate AI question</button>`}
       ${state.aiGenError?`<span style="font-size:12px;color:#C94040">${escHtml(state.aiGenError)}</span>`:''}
     </div>
     <span style="font-size:12px;color:${loadAIKey()?'#2E9C8E':'#3D6FD1'};cursor:pointer;font-weight:500" onclick="openKeyModal()">${loadAIKey()?'⚙ API key saved':'⚙ Add API key'}</span>
   </div>
-  ${state.paReviewRound?`<div style="background:#FDF7F0;border:1px solid #F0C080;border-radius:10px;padding:10px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px">
+  ${state.paReviewRound?`<div style="background:var(--tint-amber);border:1px solid #F0C080;border-radius:10px;padding:10px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px">
     <span style="font-size:16px">🔁</span>
     <div>
       <div style="font-size:13px;font-weight:600;color:#C97B30">Review round — questions you found difficult</div>
-      <div style="font-size:12px;color:#616B7A">${qs.length} question${qs.length!==1?'s':''} to retry</div>
+      <div style="font-size:12px;color:var(--t2)">${qs.length} question${qs.length!==1?'s':''} to retry</div>
     </div>
   </div>`:''}
   <div class="flex items-center justify-between mb-20 pa-meta">
@@ -989,10 +1220,10 @@ function renderWrittenPractice(){
       ${_qRem!==null?`<span id="pa-countdown" style="font-size:12px;font-weight:600;color:${_qColor};font-variant-numeric:tabular-nums">${_qFmt} left</span>`:''}
     </div>
     <div class="flex items-center gap-8">
-      ${q.ai?`<span class="badge" style="background:#ECF1FB;color:#3D6FD1">✨ AI</span>`:''}
+      ${q.ai?`<span class="badge" style="background:var(--tint-blue);color:#3D6FD1">✨ AI</span>`:''}
       <span class="badge" style="background:${q.chip}18;color:${q.chip}">${q.code}</span>
-      <span class="badge" style="background:#F5F6F8;color:#616B7A">${q.marks} marks</span>
-      <span class="badge" style="background:#F5F6F8;color:#616B7A" title="Suggested time at ~1.8 min/mark">${Math.round(q.marks*1.8)} min</span>
+      <span class="badge" style="background:var(--s2);color:var(--t2)">${q.marks} marks</span>
+      <span class="badge" style="background:var(--s2);color:var(--t2)" title="Suggested time at ~1.8 min/mark">${Math.round(q.marks*1.8)} min</span>
       <button class="btn btn-ghost btn-sm" onclick="resetPA()">Restart</button>
     </div>
   </div>
@@ -1009,7 +1240,7 @@ function renderWrittenPractice(){
       <button class="btn btn-ghost btn-sm" onclick="togglePAPreview()">${state.paPreview?'✏ Edit':'👁 Preview'}</button>
     </div>
     ${state.paPreview
-      ?`<div id="pa-preview" class="rd" style="padding:12px 14px;background:#F8F9FB;border-radius:8px;min-height:120px">${state.paText?renderMd(state.paText):'<span style="color:#616B7A">Nothing to preview yet</span>'}</div>`
+      ?`<div id="pa-preview" class="rd" style="padding:12px 14px;background:#F8F9FB;border-radius:8px;min-height:120px">${state.paText?renderMd(state.paText):'<span style="color:var(--t2)">Nothing to preview yet</span>'}</div>`
       :`<textarea id="pa-answer" rows="7" placeholder="Write your answer here… (use $…$ for inline LaTeX)" oninput="state.paText=this.value">${escHtml(state.paText)}</textarea>`
     }
     <div class="flex items-center justify-between" style="margin-top:12px">
@@ -1021,7 +1252,7 @@ function renderWrittenPractice(){
   ${state.paStatus==='submitted'?`
   <div class="card mb-16" id="pa-result">
     <div style="font-size:13px;font-weight:600;margin-bottom:10px">Your answer</div>
-    <div class="rd" style="padding:12px 14px;background:#F8F9FB;border-radius:8px;white-space:pre-wrap">${escHtml(state.paText)||'<span style="color:#616B7A">No answer written</span>'}</div>
+    <div class="rd" style="padding:12px 14px;background:#F8F9FB;border-radius:8px;white-space:pre-wrap">${escHtml(state.paText)||'<span style="color:var(--t2)">No answer written</span>'}</div>
   </div>
 
   <div class="card mb-16" style="border-left:3px solid #3D6FD1">
@@ -1034,9 +1265,9 @@ function renderWrittenPractice(){
     <div style="font-size:13px;font-weight:600;margin-bottom:4px">AI marking</div>
     <div class="text-xs text-secondary mb-12">Gemini will read your answer and score it against the model</div>
     ${state.aiMarking?`
-      <div style="display:flex;align-items:center;gap:10px;padding:14px;background:#F5F6F8;border-radius:8px">
+      <div style="display:flex;align-items:center;gap:10px;padding:14px;background:var(--s2);border-radius:8px">
         <div style="width:18px;height:18px;border:2.5px solid #3D6FD1;border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite;flex-shrink:0"></div>
-        <span style="font-size:13px;color:#616B7A">Marking your answer…</span>
+        <span style="font-size:13px;color:var(--t2)">Marking your answer…</span>
       </div>`:`
       <button class="btn btn-primary" onclick="aiMarkAnswer()">✨ Mark my answer</button>
       <div class="verdict-row" style="margin-top:12px">
@@ -1056,7 +1287,7 @@ function renderWrittenPractice(){
   ${state.paStatus==='graded'?`
   <div class="card mb-16">
     <div style="font-size:13px;font-weight:600;margin-bottom:10px">Your answer</div>
-    <div class="rd" style="padding:12px 14px;background:#F8F9FB;border-radius:8px;white-space:pre-wrap">${escHtml(state.paText)||'<span style="color:#616B7A">No answer written</span>'}</div>
+    <div class="rd" style="padding:12px 14px;background:#F8F9FB;border-radius:8px;white-space:pre-wrap">${escHtml(state.paText)||'<span style="color:var(--t2)">No answer written</span>'}</div>
   </div>
   <div class="card mb-16" style="border-left:3px solid #3D6FD1">
     <div style="font-size:13px;font-weight:600;color:#3D6FD1;margin-bottom:10px">Model answer</div>
@@ -1108,7 +1339,7 @@ function renderRPractice(){
     <div class="flex items-center justify-between mb-20">
       <div class="flex items-center gap-8">
         ${state.aiGenerating
-          ?`<span class="badge" style="background:#ECF1FB;color:#3D6FD1">✨ Generating…</span>`
+          ?`<span class="badge" style="background:var(--tint-blue);color:#3D6FD1">✨ Generating…</span>`
           :`<button class="btn btn-primary" onclick="generateRQ()">✨ Generate AI question</button>`}
         ${state.aiGenError?`<span style="font-size:12px;color:#C94040">${escHtml(state.aiGenError)}</span>`:''}
       </div>
@@ -1126,9 +1357,9 @@ function renderRPractice(){
   const code=state.rCode!==null?state.rCode:defaultCode;
 
   let statusBadge='';
-  if(state.rStatus==='loading') statusBadge=`<span class="badge" style="background:#FDF7F0;color:#C97B30"><span style="display:inline-block;width:10px;height:10px;border:2px solid #C97B30;border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:4px"></span>R initialising…</span>`;
-  else if(state.rStatus==='ready') statusBadge=`<span class="badge" style="background:#F0FAF8;color:#2E9C8E">R ready</span>`;
-  else if(state.rStatus==='error') statusBadge=`<span class="badge" style="background:#FDF2F2;color:#C94040">R unavailable</span>`;
+  if(state.rStatus==='loading') statusBadge=`<span class="badge" style="background:var(--tint-amber);color:#C97B30"><span style="display:inline-block;width:10px;height:10px;border:2px solid #C97B30;border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:4px"></span>R initialising…</span>`;
+  else if(state.rStatus==='ready') statusBadge=`<span class="badge" style="background:var(--tint-teal);color:#2E9C8E">R ready</span>`;
+  else if(state.rStatus==='error') statusBadge=`<span class="badge" style="background:var(--tint-red);color:#C94040">R unavailable</span>`;
 
   const isAI = !!rq.ai;
 
@@ -1136,7 +1367,7 @@ function renderRPractice(){
   <div class="flex items-center justify-between mb-16">
     <div class="flex items-center gap-8">
       ${state.aiGenerating
-        ?`<span class="badge" style="background:#ECF1FB;color:#3D6FD1">✨ Generating…</span>`
+        ?`<span class="badge" style="background:var(--tint-blue);color:#3D6FD1">✨ Generating…</span>`
         :`<button class="btn btn-ghost btn-sm" onclick="generateRQ()">✨ Generate AI question</button>`}
       ${state.aiGenError?`<span style="font-size:12px;color:#C94040">${escHtml(state.aiGenError)}</span>`:''}
     </div>
@@ -1146,9 +1377,9 @@ function renderRPractice(){
   <div class="flex items-center justify-between mb-16">
     <div class="text-sm text-secondary">R Question ${idx+1} of ${rqs.length}</div>
     <div class="flex items-center gap-8">
-      ${isAI?`<span class="badge" style="background:#ECF1FB;color:#3D6FD1">✨ AI</span>`:''}
+      ${isAI?`<span class="badge" style="background:var(--tint-blue);color:#3D6FD1">✨ AI</span>`:''}
       <span class="badge" style="background:#2E9C8E18;color:#2E9C8E">CS1B</span>
-      <span class="badge" style="background:#F5F6F8;color:#616B7A">${rq.marks} marks</span>
+      <span class="badge" style="background:var(--s2);color:var(--t2)">${rq.marks} marks</span>
       ${statusBadge}
     </div>
   </div>
@@ -1167,9 +1398,9 @@ function renderRPractice(){
       <div class="text-xs text-secondary mb-6" style="font-weight:600">Data preview</div>
       <div style="overflow-x:auto">
         <table style="font-family:'JetBrains Mono',monospace;font-size:12px;border-collapse:collapse">
-          <tr>${rq.preview.cols.map(c=>`<th style="padding:4px 10px;text-align:left;color:#616B7A;font-weight:600;border-bottom:1px solid #E8EBF0">${escHtml(String(c))}</th>`).join('')}</tr>
+          <tr>${rq.preview.cols.map(c=>`<th style="padding:4px 10px;text-align:left;color:var(--t2);font-weight:600;border-bottom:1px solid var(--border)">${escHtml(String(c))}</th>`).join('')}</tr>
           ${rq.preview.rows.map(r=>`<tr>${r.map(v=>`<td style="padding:4px 10px;border-bottom:1px solid #F5F6F8">${escHtml(String(v))}</td>`).join('')}</tr>`).join('')}
-          <tr><td colspan="${rq.preview.cols.length}" style="padding:4px 10px;color:#616B7A;font-size:11px">…</td></tr>
+          <tr><td colspan="${rq.preview.cols.length}" style="padding:4px 10px;color:var(--t2);font-size:11px">…</td></tr>
         </table>
       </div>
     </div>`}
@@ -1276,7 +1507,7 @@ function renderRPractice(){
   ${state.showModel?`
   <div class="card" style="border-left:3px solid #3D6FD1">
     <div style="font-size:13px;font-weight:600;color:#3D6FD1;margin-bottom:8px">Model answer</div>
-    <pre style="font-family:'JetBrains Mono',monospace;font-size:12.5px;line-height:1.6;white-space:pre-wrap;color:#1B2330">${escHtml(rq.model)}</pre>
+    <pre style="font-family:'JetBrains Mono',monospace;font-size:12.5px;line-height:1.6;white-space:pre-wrap;color:var(--t1)">${escHtml(rq.model)}</pre>
   </div>`:''}`;
 }
 
@@ -1327,6 +1558,8 @@ function renderProgress(){
     </div>
   </div>
 
+  ${renderTrends()}
+  ${renderMilestones()}
   ${whHtml}
 
   ${SYLLABUS.map(course=>{
@@ -1344,7 +1577,7 @@ function renderProgress(){
           <div style="font-size:20px;font-weight:700;color:${course.color}">${coursePoolPct(course)}%</div>
           <div class="text-xs text-secondary">covered</div>
         </div>
-        <span style="color:#616B7A;font-size:14px;transition:transform .2s;display:inline-block;transform:rotate(${open?90:0}deg)">▶</span>
+        <span style="color:var(--t2);font-size:14px;transition:transform .2s;display:inline-block;transform:rotate(${open?90:0}deg)">▶</span>
       </div>
 
       ${open?`
@@ -1355,11 +1588,11 @@ function renderProgress(){
           return `
           <div>
             <div class="topic-row${state.expandedTopics[topic.id]?' expanded':''}" onclick="toggleTopic('${topic.id}')">
-              <span class="expand-caret" style="color:#616B7A;font-size:12px">▶</span>
+              <span class="expand-caret" style="color:var(--t2);font-size:12px">▶</span>
               <input type="checkbox" ${pct===100?'checked':pct>0?'indeterminate-js':''} onclick="event.stopPropagation();toggleTopic_pool('${topic.id}',this.checked)" style="flex-shrink:0;width:16px;height:16px;cursor:pointer" id="tc-${topic.id}">
               <div style="flex:1">
-                <div style="font-size:13.5px;font-weight:600">${topic.name} <span style="color:#616B7A;font-weight:400">[${topic.w}%]</span></div>
-                <div style="font-size:11.5px;color:#616B7A;margin-top:2px">${pooled}/${topic.subs.length} subtopics covered</div>
+                <div style="font-size:13.5px;font-weight:600">${topic.name} <span style="color:var(--t2);font-weight:400">[${topic.w}%]</span></div>
+                <div style="font-size:11.5px;color:var(--t2);margin-top:2px">${pooled}/${topic.subs.length} subtopics covered</div>
               </div>
               <div class="mastery-bar" style="max-width:100px">
                 <div class="mastery-fill" style="width:${pct}%;background:${course.color}"></div>
@@ -1372,7 +1605,7 @@ function renderProgress(){
               <div class="sub-row">
                 <input type="checkbox" ${covered?'checked':''} onchange="togglePool('${sub.id}',this.checked)">
                 <div style="flex:1">
-                  <div style="font-size:12px;color:#616B7A;font-weight:600;margin-bottom:1px">${sub.num}</div>
+                  <div style="font-size:12px;color:var(--t2);font-weight:600;margin-bottom:1px">${sub.num}</div>
                   <div style="font-size:13px">${sub.name}</div>
                 </div>
                 <span style="font-size:11px;color:${covered?'#2E9C8E':'#6B7280'};flex-shrink:0;font-weight:600">${covered?'✓ covered':'not yet'}</span>
@@ -1460,7 +1693,15 @@ window.rateCard=function(rating){
   const cards=filteredCards();
   if(state.fcIndex>=cards.length)return;
   const card=cards[state.fcIndex];
+  // Snapshot everything a rating touches so it can be undone (fat-finger fix).
   if(card){
+    state.fcUndo={
+      subId:card.sub,
+      m:mastery[card.sub]?JSON.stringify(mastery[card.sub]):null,
+      stats:JSON.stringify(studyStats),
+      deck:state.fcDeck.slice(),weak:state.fcWeakQueue.slice(),pool:(state.fcPool||[]).slice(),
+      index:state.fcIndex,review:state.fcReviewRound,total:state.fcTotalReviewed
+    };
     recordCardRating(card.sub, rating);
     if(rating==='again'||rating==='hard') state.fcWeakQueue.push(card);
     state.fcTotalReviewed++;
@@ -1479,8 +1720,20 @@ window.rateCard=function(rating){
 };
 
 window.resetFC=function(){
-  state.fcIndex=0;state.fcFlipped=false;state.fcWeakQueue=[];state.fcReviewRound=false;state.fcTotalReviewed=0;buildDecks();
+  state.fcIndex=0;state.fcFlipped=false;state.fcWeakQueue=[];state.fcReviewRound=false;state.fcTotalReviewed=0;state.fcUndo=null;buildDecks();
   render();
+};
+
+// Undo the most recent flashcard rating and put the card back in front of you.
+window.undoRating=function(){
+  const u=state.fcUndo;if(!u)return;
+  if(u.m===null)delete mastery[u.subId];else mastery[u.subId]=JSON.parse(u.m);
+  saveMastery();
+  studyStats=JSON.parse(u.stats);saveStudyStats();
+  state.fcDeck=u.deck;state.fcWeakQueue=u.weak;state.fcPool=u.pool;
+  state.fcIndex=u.index;state.fcReviewRound=u.review;state.fcTotalReviewed=u.total;
+  state.fcFlipped=true;state.fcUndo=null;
+  render();showToast('Undid last rating');
 };
 
 window.submitPA=function(){
@@ -1510,6 +1763,7 @@ window.gradePA=function(verdict){
   state.paStatus='graded';
   studyStats.writtenAnswered=(studyStats.writtenAnswered||0)+1;
   saveStudyStats();
+  recordDailySnapshot();checkMilestones();
   // Save to written history (Issue-04)
   const qid=_qHash(q);
   writtenHistory[qid]={timestamp:new Date().toISOString(),verdict,score:add,maxMarks:marks,topic:q.topic||'',stem:(q.stem||'').slice(0,120),answer:state.paText.slice(0,500)};
@@ -1583,6 +1837,7 @@ Return ONLY a valid JSON object with no markdown:
     state.paStatus='graded';
     studyStats.writtenAnswered=(studyStats.writtenAnswered||0)+1;
     saveStudyStats();
+    recordDailySnapshot();checkMilestones();
     // Save to written history and update mastery (Issues 04 + 06)
     const qid=_qHash(q);
     writtenHistory[qid]={timestamp:new Date().toISOString(),verdict,score:add,maxMarks:q.marks,topic:q.topic||'',stem:(q.stem||'').slice(0,120),answer:studentAnswer.slice(0,500)};
@@ -1791,6 +2046,13 @@ window.adjustGoal=function(delta){
   state.dailyGoal=Math.max(5,state.dailyGoal+delta);
   saveExamDate();
   render();
+};
+
+window.adjustGoalTo=function(n){
+  state.dailyGoal=Math.max(5,Math.round(n));
+  saveExamDate();
+  render();
+  showToast('Daily goal set to '+state.dailyGoal);
 };
 
 // Cards per flashcard session (before the weak-card review round). Defaults to
@@ -2140,12 +2402,12 @@ function renderAIKeyModal(){
   const hasKey=!!loadAIKey();
   return `<div class="modal-overlay" onclick="closeKeyModal()">
     <div class="modal-box" onclick="event.stopPropagation()" style="width:420px">
-      <div class="modal-title">Google Gemini API Key <span style="font-size:12px;font-weight:500;color:#2E9C8E;background:#F0FAF8;padding:2px 8px;border-radius:4px;margin-left:4px">Free</span></div>
+      <div class="modal-title">Google Gemini API Key <span style="font-size:12px;font-weight:500;color:#2E9C8E;background:var(--tint-teal);padding:2px 8px;border-radius:4px;margin-left:4px">Free</span></div>
       <div class="text-sm text-secondary mb-8">Get a free key at <strong>aistudio.google.com</strong> → "Get API key". No credit card required.</div>
       <div class="text-sm text-secondary mb-16">Your key is saved only in your browser's local storage.</div>
       <div class="mb-20">
         <label class="form-label">API Key ${hasKey?'<span style="color:#2E9C8E">(saved)</span>':''}</label>
-        <input id="ai-key-input" type="password" value="${escHtml(loadAIKey())}" placeholder="AIzaSy…" style="font-family:'JetBrains Mono',monospace;font-size:12.5px;border:1px solid #E8EBF0;border-radius:8px;padding:9px 12px;width:100%;outline:none;color:#1B2330;background:#FAFBFC">
+        <input id="ai-key-input" type="password" value="${escHtml(loadAIKey())}" placeholder="AIzaSy…" style="font-family:'JetBrains Mono',monospace;font-size:12.5px;border:1px solid var(--border);border-radius:8px;padding:9px 12px;width:100%;outline:none;color:var(--t1);background:#FAFBFC">
       </div>
       <div class="flex gap-8">
         <button class="btn btn-ghost" style="flex:1" onclick="closeKeyModal()">Cancel</button>
@@ -2165,9 +2427,12 @@ window.exportData = function() {
     studyStats,
     examDate: state.examDate,
     dailyGoal: state.dailyGoal,
+    sessionSize: state.fcSessionSize,
     chipDone: state.chipDone,
+    history: studyHistory,
+    badges,
     exportedAt: new Date().toISOString(),
-    version: 2,
+    version: 3,
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
@@ -2176,6 +2441,8 @@ window.exportData = function() {
   a.download = `tabula-backup-${new Date().toISOString().slice(0,10)}.json`;
   a.click();
   URL.revokeObjectURL(url);
+  markBackup();
+  render();
 };
 
 window.triggerImport = function() {
@@ -2195,7 +2462,10 @@ window.triggerImport = function() {
         if (data.studyStats) { studyStats = data.studyStats; saveStudyStats(); }
         if (data.examDate) { state.examDate = data.examDate; saveExamDate(); }
         if (typeof data.dailyGoal === 'number') { state.dailyGoal = data.dailyGoal; saveExamDate(); }
+        if (typeof data.sessionSize === 'number') { state.fcSessionSize = data.sessionSize; saveExamDate(); }
         if (data.chipDone) { state.chipDone = data.chipDone; saveChipDone(); }
+        if (Array.isArray(data.history)) { studyHistory = data.history; saveHistory(); }
+        if (data.badges) { badges = data.badges; saveBadges(); }
         alert('Backup restored successfully.');
         render();
       } catch(err) {
@@ -2244,7 +2514,7 @@ function renderDangerZone() {
         <div style="flex:1;font-size:12.5px;line-height:1.3;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">${escHtml(s.name)}</div>
         <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
           <span style="font-size:13px;font-weight:700;color:${s.pct < 40 ? '#C94040' : '#C97B30'}">${s.pct}%</span>
-          <span style="font-size:11px;color:#616B7A">▶</span>
+          <span style="font-size:11px;color:var(--t2)">▶</span>
         </div>
       </div>`).join('')}
   </div>`;
@@ -2382,10 +2652,10 @@ function renderExamTimer() {
   const left = Math.max(0, Math.round((state.examModeEnd - Date.now()) / 1000));
   const cls = left < 300 ? 'danger' : left < 900 ? 'warn' : 'ok';
   return `<div style="display:flex;align-items:center;gap:10px;background:#1B2330;border-radius:10px;padding:10px 16px;margin-bottom:16px">
-    <span style="font-size:13px;font-weight:600;color:#616B7A">🕐 Exam mode</span>
+    <span style="font-size:13px;font-weight:600;color:var(--t2)">🕐 Exam mode</span>
     <span id="exam-timer-display" class="exam-timer ${cls}">${fmtExamTime(left)}</span>
     <span style="flex:1;font-size:12px;color:#585B70">remaining — ${EXAM_TOTAL_MINS[state.module]||180} min total</span>
-    <button onclick="toggleExamMode()" style="font-size:12px;color:#616B7A;background:transparent;border:1px solid #313244;border-radius:6px;padding:4px 10px;cursor:pointer;font-family:inherit">End</button>
+    <button onclick="toggleExamMode()" style="font-size:12px;color:var(--t2);background:transparent;border:1px solid #313244;border-radius:6px;padding:4px 10px;cursor:pointer;font-family:inherit">End</button>
   </div>`;
 }
 
