@@ -33,7 +33,7 @@ let state = {
   view:'home',
   variant:1,
   module:'ALL',
-  fcIndex:0, fcFlipped:false, fcDeck:[], fcWeakQueue:[], fcReviewRound:false, fcTotalReviewed:0,
+  fcIndex:0, fcFlipped:false, fcDeck:[], fcPool:[], fcWeakQueue:[], fcReviewRound:false, fcTotalReviewed:0, fcSessionSize:null,
   paIndex:0, paText:'', paStatus:'idle', paVerdict:null, paScore:0, paDeck:[], paWeakQueue:[], paReviewRound:false, paStartTime:null, aiMarking:false, paAIFeedback:'',
   taskDone:[true,false,false],
   rStatus:'idle', rIndex:0, rCode:null, rRan:false, rRunning:false, rOutput:[], rImages:[], rEnv:[], showHint:false, showModel:false,
@@ -204,15 +204,16 @@ function loadExamDate(){
     const s=localStorage.getItem('tabula_examdate_v1');
     if(s)return JSON.parse(s);
   }catch(e){}
-  return {examDate:'2026-09-22',dailyGoal:45};
+  return {examDate:'2026-09-22',dailyGoal:45,sessionSize:null};
 }
-function saveExamDate(){localStorage.setItem('tabula_examdate_v1',JSON.stringify({examDate:state.examDate,dailyGoal:state.dailyGoal}));}
+function saveExamDate(){localStorage.setItem('tabula_examdate_v1',JSON.stringify({examDate:state.examDate,dailyGoal:state.dailyGoal,sessionSize:state.fcSessionSize}));}
 
 // Init
 (function init(){
   const ed=loadExamDate();
   state.examDate=ed.examDate;
   state.dailyGoal=ed.dailyGoal;
+  state.fcSessionSize=(typeof ed.sessionSize==='number'&&ed.sessionSize>0)?ed.sessionSize:null;
   state.planData=loadPlan();
   state.chipDone=loadChipDone();
   // One-time migration: copy any CS1B mastery stored under old bare IDs to cs1b-* IDs
@@ -237,17 +238,32 @@ function daysToExam(){
   return Math.max(0,diff);
 }
 
+// How many cards to review before the weak-card review round. Defaults to the
+// daily goal ("same number as the daily target") but can be set independently
+// on the flashcards screen.
+function fcSessionCap(){
+  const n=(typeof state.fcSessionSize==='number'&&state.fcSessionSize>0)?state.fcSessionSize:state.dailyGoal;
+  return Math.max(1,n||20);
+}
+
+function cardIsDue(c){
+  const m=mastery[c.sub];
+  if(!m||!m.nextReview)return true;
+  const t=new Date();t.setHours(0,0,0,0);
+  return new Date(m.nextReview)<=t;
+}
+
 function buildDecks(){
   let cards=CARDS;
   if(state.drillSub){cards=cards.filter(c=>c.sub===state.drillSub);state.drillSub=null;}
   else if(state.module==='CS1B') cards=cards.filter(c=>c.module==='CS1A'||c.module==='CS1B');
   else if(state.module!=='ALL') cards=cards.filter(c=>c.module===state.module);
   cards=cards.filter(c=>pool[c.sub]);
-  state.fcDeck=shuffle(cards);
+  cards=shuffle(cards);
   // SM-2 ordering: cards due today (nextReview ≤ today) come first, sorted most-overdue first;
   // cards not yet due follow, sorted by soonest upcoming review date.
   const todaySM=new Date();todaySM.setHours(0,0,0,0);
-  state.fcDeck.sort((a,b)=>{
+  cards.sort((a,b)=>{
     const am=mastery[a.sub];const bm=mastery[b.sub];
     const aNxt=am?.nextReview?new Date(am.nextReview):new Date(0);
     const bNxt=bm?.nextReview?new Date(bm.nextReview):new Date(0);
@@ -257,6 +273,11 @@ function buildDecks(){
     if(!aDue&&bDue)return 1;
     return aNxt-bNxt; // most overdue first when both due; soonest next when neither due
   });
+  // Keep the full eligible list for the pool counters, then cap the active deck
+  // to the session size so the user only reviews as many as they chose before
+  // the review round kicks in.
+  state.fcPool=cards;
+  state.fcDeck=cards.slice(0,fcSessionCap());
 
   let qs=QUESTIONS;
   if(state.module==='CS1B') qs=qs.filter(q=>q.module==='CS1A'||q.module==='CS1B');
@@ -800,10 +821,12 @@ function renderAddModal(){
 // ========================
 function renderFlashcards(){
   const cards=filteredCards();
-  // QW-2: count due today vs upcoming
-  const _fcNow=new Date();_fcNow.setHours(0,0,0,0);
-  const _fcDueToday=cards.filter(c=>{const m=mastery[c.sub];return !m?.nextReview||new Date(m.nextReview)<=_fcNow;}).length;
-  const _fcUpcoming=cards.length-_fcDueToday;
+  // Counters. "Left" is driven off session position so it ticks down on every
+  // single card; "due today"/"upcoming" are computed live from the whole pool
+  // (nextReview is per-subtopic, so these move in steps as subtopics schedule).
+  const pool=(state.fcPool&&state.fcPool.length)?state.fcPool:cards;
+  const _fcDueToday=pool.filter(cardIsDue).length;
+  const _fcUpcoming=pool.length-_fcDueToday;
   if(cards.length===0){
     return `<div class="card" style="text-align:center;padding:60px 40px">
       <div style="font-size:32px;margin-bottom:12px">🃏</div>
@@ -821,6 +844,7 @@ function renderFlashcards(){
   const card=cards[idx];
   const circ=163.4;
   const prog=Math.round((idx/cards.length)*circ*10)/10;
+  const _fcLeft=Math.max(0,cards.length-idx); // remaining in this session — ticks every card
 
   return `
   ${state.fcReviewRound?`<div style="background:#FDF7F0;border:1px solid #F0C080;border-radius:10px;padding:10px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px">
@@ -829,11 +853,19 @@ function renderFlashcards(){
       <div style="font-size:13px;font-weight:600;color:#C97B30">Review round — cards you found difficult</div>
       <div style="font-size:12px;color:#616B7A">${cards.length} card${cards.length!==1?'s':''} to retry</div>
     </div>
-  </div>`:`<div style="display:flex;align-items:center;gap:10px;padding:7px 14px;background:#F5F6F8;border-radius:8px;margin-bottom:14px;font-size:12.5px;color:#616B7A">
-    <span><strong style="color:#3D6FD1">${_fcDueToday}</strong> due today</span>
+  </div>`:`<div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;padding:8px 14px;background:#F5F6F8;border-radius:8px;margin-bottom:14px;font-size:12.5px;color:#616B7A">
+    <span><strong style="color:#3D6FD1">${_fcLeft}</strong> left</span>
+    <span style="color:#D0D5DE">·</span>
+    <span><strong style="color:#1B2330">${_fcDueToday}</strong> due today</span>
     <span style="color:#D0D5DE">·</span>
     <span><strong style="color:#1B2330">${_fcUpcoming}</strong> upcoming</span>
     ${state.module!=='ALL'?`<span style="color:#D0D5DE">·</span><span style="font-size:11px;opacity:.8">${state.module} only</span>`:''}
+    <span style="margin-left:auto;display:flex;align-items:center;gap:6px" title="Cards per session before the review round — changing restarts this session">
+      <span style="font-size:11px;opacity:.85">Session</span>
+      <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="adjustSessionSize(-5)" aria-label="Fewer cards per session">−</button>
+      <strong style="min-width:22px;text-align:center;color:#1B2330" aria-live="polite">${fcSessionCap()}</strong>
+      <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="adjustSessionSize(5)" aria-label="More cards per session">+</button>
+    </span>
   </div>`}
   <div class="flex items-center justify-between mb-20">
     <div class="text-sm text-secondary">${idx+1} of ${cards.length} cards</div>
@@ -874,13 +906,25 @@ function renderFlashcards(){
 }
 
 function renderFCComplete(total){
-  return `<div class="card" style="text-align:center;padding:60px 40px;max-width:500px;margin:0 auto">
-    <div style="font-size:40px;margin-bottom:16px">🎉</div>
-    <div style="font-size:20px;font-weight:700;margin-bottom:8px">Deck complete!</div>
-    <div class="text-sm text-secondary mb-24">You reviewed all ${state.fcTotalReviewed} cards. Great work!</div>
-    <div class="flex gap-12" style="justify-content:center">
-      <button class="btn btn-ghost" onclick="resetFC()">Review again</button>
-      <button class="btn btn-primary" onclick="go('practice')">Try practice Qs</button>
+  const dueLeft=(state.fcPool||[]).filter(cardIsDue).length;
+  const cap=fcSessionCap();
+  const nextBatch=Math.min(cap,dueLeft);
+  return `<div class="card" style="text-align:center;padding:56px 40px;max-width:500px;margin:0 auto">
+    <div style="font-size:40px;margin-bottom:16px">${dueLeft>0?'✅':'🎉'}</div>
+    <div style="font-size:20px;font-weight:700;margin-bottom:8px">Session complete!</div>
+    <div class="text-sm text-secondary mb-8">You reviewed ${state.fcTotalReviewed} card${state.fcTotalReviewed!==1?'s':''} this session. Great work!</div>
+    <div class="text-sm mb-24" style="color:${dueLeft>0?'#C97B30':'#2E9C8E'};font-weight:600">
+      ${dueLeft>0?`${dueLeft} card${dueLeft!==1?'s':''} still due in your pool`:`You're all caught up for today 🎯`}
+    </div>
+    <div style="display:flex;align-items:center;justify-content:center;gap:6px;margin-bottom:20px" title="Cards per session">
+      <span style="font-size:12px;color:#616B7A">Cards per session</span>
+      <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="adjustSessionSize(-5)" aria-label="Fewer cards per session">−</button>
+      <strong style="min-width:22px;text-align:center" aria-live="polite">${cap}</strong>
+      <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="adjustSessionSize(5)" aria-label="More cards per session">+</button>
+    </div>
+    <div class="flex gap-12" style="justify-content:center;flex-wrap:wrap">
+      ${dueLeft>0?`<button class="btn btn-primary" onclick="resetFC()">Continue — next ${nextBatch}</button>`:`<button class="btn btn-primary" onclick="go('home')">Back to dashboard</button>`}
+      <button class="btn btn-ghost" onclick="go('practice')">Try practice Qs</button>
     </div>
   </div>`;
 }
@@ -1747,6 +1791,19 @@ window.adjustGoal=function(delta){
   state.dailyGoal=Math.max(5,state.dailyGoal+delta);
   saveExamDate();
   render();
+};
+
+// Cards per flashcard session (before the weak-card review round). Defaults to
+// the daily goal; once the user sets it, it sticks. Changing it restarts the
+// current session so the new cap takes effect immediately.
+window.adjustSessionSize=function(delta){
+  state.fcSessionSize=Math.max(5,fcSessionCap()+delta);
+  saveExamDate();
+  // Restart only when actively mid-session so the new cap takes effect; on the
+  // completion screen just re-render so "Continue — next N" reflects the change.
+  const midSession=state.view==='flashcards'&&state.fcDeck&&state.fcIndex<state.fcDeck.length;
+  if(midSession)resetFC();
+  else render();
 };
 
 window.toggleChip=function(dayIndex,chipIndex,val){
