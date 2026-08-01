@@ -8,10 +8,10 @@ function defaultPlan(){
   const days=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
   const defaultChips=[
     [{label:'CB1 · Flashcards',color:'#6B5DD3',modId:'CB1',type:'flashcards'}],
-    [{label:'CM1A · Flashcards',color:'#3D6FD1',modId:'CM1A',type:'flashcards'},{label:'CS1A · Written',color:'#2E9C8E',modId:'CS1A',type:'practice'}],
-    [{label:'CS1A · Written',color:'#2E9C8E',modId:'CS1A',type:'practice'}],
-    [{label:'CM1B · Written',color:'#3D6FD1',modId:'CM1B',type:'practice'}],
-    [{label:'CM1A · Flashcards',color:'#3D6FD1',modId:'CM1A',type:'flashcards'},{label:'CS1A · Written',color:'#2E9C8E',modId:'CS1A',type:'practice'},{label:'CB1 · Written',color:'#6B5DD3',modId:'CB1',type:'practice'}],
+    [{label:'CM1 · Flashcards',color:'#3D6FD1',modId:'CM1',type:'flashcards'},{label:'CS1 · Flashcards',color:'#2E9C8E',modId:'CS1',type:'flashcards'}],
+    [{label:'CS1 · Flashcards',color:'#2E9C8E',modId:'CS1',type:'flashcards'}],
+    [{label:'CM1 · Flashcards',color:'#3D6FD1',modId:'CM1',type:'flashcards'}],
+    [{label:'CM1 · Flashcards',color:'#3D6FD1',modId:'CM1',type:'flashcards'},{label:'CB1 · Flashcards',color:'#6B5DD3',modId:'CB1',type:'flashcards'}],
     [{label:'Review',color:'#7B8595',modId:null,type:null}],
     [],
   ];
@@ -177,7 +177,7 @@ const MILESTONES=[
   {id:'streak-3',name:'3-day streak',icon:'🔥',test:()=>studyStats.streak>=3},
   {id:'streak-7',name:'7-day streak',icon:'⚡',test:()=>studyStats.streak>=7},
   {id:'streak-30',name:'30-day streak',icon:'🌟',test:()=>studyStats.streak>=30},
-  {id:'written-10',name:'10 written Qs',icon:'✍️',test:()=>(studyStats.writtenAnswered||0)>=10},
+  {id:'cards-500',name:'500 cards',icon:'📖',test:()=>totalCardsSeen()>=500},
   {id:'goal-hit',name:'Daily goal',icon:'✅',test:()=>state.dailyGoal>0&&(studyStats.todayCards||0)>=state.dailyGoal},
   {id:'mastery-50',name:'Halfway there',icon:'📈',test:()=>computeOverallMastery()>=50},
   {id:'mastery-80',name:'Exam ready',icon:'🎓',test:()=>computeOverallMastery()>=80},
@@ -278,14 +278,14 @@ function hasStudied(){return totalCardsSeen()>0 || (studyStats.writtenAnswered||
 
 // Compute mastery for a module from card rating history (unseen subtopics count as 0%)
 function moduleCardMastery(modId){
-  const subs=[...new Set(CARDS.filter(c=>c.module===modId).map(c=>c.sub))];
+  const subs=[...new Set(CARDS.filter(c=>examOf(c.module)===modId).map(c=>c.sub))];
   if(!subs.length) return 0;
   return Math.round(subs.reduce((a,id)=>a+subMastery(id),0)/subs.length);
 }
 
 // Count cards available for a module (in pool)
 function moduleCardsDue(modId){
-  return CARDS.filter(c=>c.module===modId&&pool[c.sub]).length;
+  return CARDS.filter(c=>examOf(c.module)===modId&&pool[c.sub]).length;
 }
 
 function loadPlan(){
@@ -373,8 +373,7 @@ function cardIsDue(c){
 function buildDecks(){
   let cards=CARDS;
   if(state.drillSub){cards=cards.filter(c=>c.sub===state.drillSub);state.drillSub=null;}
-  else if(state.module==='CS1B') cards=cards.filter(c=>c.module==='CS1A'||c.module==='CS1B');
-  else if(state.module!=='ALL') cards=cards.filter(c=>c.module===state.module);
+  else if(state.module!=='ALL') cards=cards.filter(c=>examOf(c.module)===state.module);
   cards=cards.filter(c=>pool[c.sub]);
   cards=shuffle(cards);
   // SM-2 ordering: cards due today (nextReview ≤ today) come first, sorted most-overdue first;
@@ -400,12 +399,6 @@ function buildDecks(){
   // the review round kicks in.
   state.fcPool=cards;
   state.fcDeck=cards.slice(0,fcSessionCap());
-
-  let qs=QUESTIONS;
-  if(state.module==='CS1B') qs=qs.filter(q=>q.module==='CS1A'||q.module==='CS1B');
-  else if(state.module!=='ALL') qs=qs.filter(q=>q.module===state.module);
-  qs=qs.filter(q=>pool[q.sub]);
-  state.paDeck=shuffle(qs);
 }
 
 function filteredCards(){
@@ -413,83 +406,10 @@ function filteredCards(){
   return state.fcDeck;
 }
 
-function filteredQuestions(){
-  if(!state.paDeck||state.paDeck.length===0) buildDecks();
-  return state.paDeck;
-}
-
-function filteredRQ(){
-  const cs1bInPool=SYLLABUS.some(c=>c.code==='CS1B'&&c.topics.some(t=>t.subs.some(s=>pool[s.id])));
-  return [...state.aiRQuestions,...(cs1bInPool?R_QUESTIONS:[])];
-}
-
-// WebR
-let webR=null;
-let webRLoading=false;
-let webRReady=false;
-let webRShelter=null;
-
-async function initWebR(){
-  if(webRReady||webRLoading)return;
-  webRLoading=true;
-  state.rStatus='loading';
-  render();
-  try{
-    const {WebR}=await import('https://webr.r-wasm.org/latest/webr.mjs');
-    webR=new WebR();
-    await webR.init();
-    webRShelter=await new webR.Shelter();
-    webRReady=true;
-    state.rStatus='ready';
-    // QW-6: pre-load MASS and survival silently
-    try{await webR.evalR('suppressMessages(library(MASS))');}catch(e){console.log('MASS preload skipped:',e);}
-    try{await webR.evalR('suppressMessages(library(survival))');}catch(e){console.log('survival preload skipped:',e);}
-  }catch(e){
-    state.rStatus='error';
-    console.error('WebR failed',e);
-  }
-  webRLoading=false;
-  render();
-}
-
-// Highlight R syntax — single pass over the escaped source so later rules can
-// never re-match HTML injected by earlier ones (e.g. digits inside hex colors)
-const R_KEYWORDS=new Set(['if','else','for','while','function','return','TRUE','FALSE','NULL','NA','Inf','NaN','in','repeat','break','next']);
-const R_FNS=new Set(['c','sum','mean','sd','var','lm','glm','summary','coef','print','cat','paste','paste0','data.frame','factor','log','exp','sqrt','abs','round','length','nrow','ncol','head','tail','plot','hist','data','library','require','cbind','rbind','seq','rep','which','max','min','range','table','as.numeric','as.character','as.factor','rnorm','rpois','dnorm','pnorm','qnorm','dbinom','pbinom','t.test','cor','predict','residuals','fitted','abline','lines','points','legend','barplot','boxplot','qqnorm','qqline','anova','aov','step','AIC','BIC','confint','quantile','apply','sapply','lapply','tapply','aggregate','matrix','rgamma','dgamma','pgamma','qgamma','rexp','dexp','pexp','qexp','rbinom','qbinom','optim','nlm','integrate','set.seed','sample','sort','order','rev','unique','cumsum','prod','choose','gamma','beta','ifelse']);
-function highlightR(code){
-  if(!code)return '';
-  const h=code.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  const tokenRe=/("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(#[^\n]*)|(\b\d+(?:\.\d+)?\b)|(\b[A-Za-z._][A-Za-z0-9._]*\b)/g;
-  return h.replace(tokenRe,(m,str,com,num,id,offset,src)=>{
-    if(str)return `<span style="color:#A6E3A1">${str}</span>`;
-    if(com)return `<span style="color:#6C7086">${com}</span>`;
-    if(num)return `<span style="color:#FAB387">${num}</span>`;
-    if(R_KEYWORDS.has(id))return `<span style="color:#CBA6F7">${id}</span>`;
-    if(R_FNS.has(id)&&/^\s*\(/.test(src.slice(offset+id.length)))return `<span style="color:#89DCEB">${id}</span>`;
-    return m;
-  });
-}
 
 // ========================
 // RENDER
 // ========================
-let paTimerInterval=null;
-function startPATimer(){if(!state.paStartTime){state.paStartTime=Date.now();}if(!paTimerInterval){paTimerInterval=setInterval(()=>{if(state.view==='practice'&&state.paStatus==='idle'){if(state.module!=='CS1B')tickPATimer();}else{clearInterval(paTimerInterval);paTimerInterval=null;}},1000);}}
-// Update timer displays in place — a full render() here would destroy the
-// answer textarea and steal focus mid-keystroke
-function tickPATimer(){
-  const el=document.getElementById('pa-elapsed');
-  if(el&&state.paStartTime)el.textContent='⏱ '+fmtElapsed(Date.now()-state.paStartTime);
-  const cd=document.getElementById('pa-countdown');
-  if(cd&&!state.examMode&&state.paQStartTime&&state.paQDuration){
-    const rem=Math.max(0,state.paQDuration-Math.floor((Date.now()-state.paQStartTime)/1000));
-    const pct=(state.paQDuration-rem)/state.paQDuration;
-    cd.style.color=pct>=0.8?'#C94040':pct>=0.5?'#C97B30':'#2E9C8E';
-    cd.textContent=`${Math.floor(rem/60)}:${String(rem%60).padStart(2,'0')} left`;
-  }
-}
-function stopPATimer(){clearInterval(paTimerInterval);paTimerInterval=null;state.paStartTime=null;}
-function fmtElapsed(ms){const s=Math.floor(ms/1000);const m=Math.floor(s/60);return m>0?`${m}m ${s%60}s`:`${s}s`;}
 // render() rebuilds app.innerHTML, so the .main scroll container is recreated and
 // scroll jumps to the top. For in-place edits (ticking a subtopic, expanding a
 // row) capture the scroll offset and restore it after the rebuild.
@@ -513,7 +433,6 @@ function render(){
     </div>
     ${renderMobileNav()}
     ${state.addingTo!==null?renderAddModal():''}
-    ${state.showKeyModal?renderAIKeyModal():''}
   `;
   }catch(err){
     // Never white-screen: show a recoverable fallback instead of a blank app
@@ -525,41 +444,6 @@ function render(){
       <button class="btn btn-primary" onclick="try{state.view='home';render()}catch(e){location.reload()}">Back to dashboard</button>
     </div>`;
     return;
-  }
-  // Restore textarea values (practice)
-  if(state.view==='practice'&&state.paStatus!=='complete'){
-    const ta=document.getElementById('pa-answer');
-    if(ta){
-      ta.value=state.paText;
-      ta.addEventListener('input',function(){state.paText=this.value;});
-    }
-  }
-  // Restore R code editor
-  if(state.view==='practice'&&state.module==='CS1B'){
-    const rta=document.getElementById('r-code-ta');
-    if(rta){
-      const rq=filteredRQ();
-      if(rq.length>0){
-        const idx=Math.min(state.rIndex,rq.length-1);
-        const rqItem=rq[idx];
-        const defaultCode=(rqItem.setup?rqItem.setup+'\n':'')+rqItem.starter;
-        rta.value=state.rCode!==null?state.rCode:defaultCode;
-        function updateEditor(){
-          const pre=document.getElementById('r-code-pre');
-          if(pre)pre.innerHTML=highlightR(rta.value);
-          updateLineNums(rta.value);
-          syncScroll();
-        }
-        rta.addEventListener('input',function(){
-          state.rCode=this.value;
-          updateEditor();
-        });
-        rta.addEventListener('keydown',function(e){
-          if(e.key==='Tab'){e.preventDefault();const s=this.selectionStart,en=this.selectionEnd;this.value=this.value.slice(0,s)+'  '+this.value.slice(en);this.selectionStart=this.selectionEnd=s+2;state.rCode=this.value;updateEditor();}
-        });
-        updateEditor();
-      }
-    }
   }
   // Typeset any LaTeX in newly rendered content
   if(window.MathJax&&MathJax.typesetPromise){
@@ -593,7 +477,6 @@ const NAV_VIEWS=[
   {id:'home',label:'Dashboard',icon:`<svg width="18" height="18" viewBox="0 0 20 20" fill="none"><rect x="3" y="3" width="6" height="6" rx="1.6" fill="currentColor"/><rect x="11" y="3" width="6" height="6" rx="1.6" fill="currentColor" opacity=".4"/><rect x="3" y="11" width="6" height="6" rx="1.6" fill="currentColor" opacity=".4"/><rect x="11" y="11" width="6" height="6" rx="1.6" fill="currentColor"/></svg>`},
   {id:'planner',label:'Planner',icon:`<svg width="18" height="18" viewBox="0 0 20 20" fill="none"><rect x="3" y="4.5" width="14" height="12.5" rx="2.4" stroke="currentColor" stroke-width="1.7"/><path d="M3 8h14M7 3v3M13 3v3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>`},
   {id:'flashcards',label:'Flashcards',icon:`<svg width="18" height="18" viewBox="0 0 20 20" fill="none"><rect x="5" y="5.5" width="12" height="9" rx="2.2" stroke="currentColor" stroke-width="1.7"/><path d="M3.4 8v6a2 2 0 0 0 2 2h7.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" opacity=".45"/></svg>`},
-  {id:'practice',label:'Practice',icon:`<svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M5.5 3.5h9a1.5 1.5 0 0 1 1.5 1.5v10a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 4 15V5a1.5 1.5 0 0 1 1.5-1.5Z" stroke="currentColor" stroke-width="1.7"/><path d="M7 8h6M7 11h4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>`},
   {id:'progress',label:'Progress',icon:`<svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M4 16V9M10 16V4M16 16v-4" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>`},
 ];
 
@@ -648,8 +531,8 @@ function formatExamDate(d){
 }
 
 function renderTopbar(){
-  const titles={home:'Dashboard',planner:'Weekly Planner',flashcards:'Flashcards',practice:'Practice',progress:'Progress'};
-  const subs={home:'Good luck today — keep going!',planner:'Plan your study week',flashcards:'Spaced repetition review',practice:'Written & coding questions',progress:'Track notes coverage · controls your study pool'};
+  const titles={home:'Dashboard',planner:'Weekly Planner',flashcards:'Flashcards',progress:'Progress'};
+  const subs={home:'Good luck today — keep going!',planner:'Plan your study week',flashcards:'Spaced repetition review',progress:'Track notes coverage · controls your study pool'};
   return `<div class="topbar">
     <div>
       <div class="topbar-title">${titles[state.view]||''}</div>
@@ -657,8 +540,7 @@ function renderTopbar(){
     </div>
     <div class="topbar-right" style="gap:12px">
       <button class="btn btn-sm btn-ghost" onclick="cycleTheme()" title="Theme: ${state.theme} (tap to change)" aria-label="Change theme, currently ${state.theme}">${themeIcon(state.theme)}</button>
-      ${state.view==='practice'?`<button class="btn btn-sm ${state.examMode?'btn-primary':'btn-ghost'}" onclick="toggleExamMode()" title="Timed exam mode (IFoA time limits)">${state.examMode?'⏱ End exam':'⏱ Exam mode'}</button>`:''}
-      ${state.view==='flashcards'||state.view==='practice'?renderModulePills():''}
+      ${state.view==='flashcards'?renderModulePills():''}
     </div>
   </div>`;
 }
@@ -681,7 +563,6 @@ function renderView(){
     case 'home': return renderHome();
     case 'planner': return renderPlanner();
     case 'flashcards': return renderFlashcards();
-    case 'practice': return renderPractice();
     case 'progress': return renderProgress();
     default: return renderHome();
   }
@@ -703,7 +584,6 @@ function renderWelcome(){
     </div>
     <div style="display:flex;flex-wrap:wrap;gap:8px">
       <button class="btn btn-primary" onclick="go('flashcards')">Start flashcards</button>
-      <button class="btn btn-ghost" onclick="go('practice')">Try a written question</button>
       <button class="btn btn-ghost" onclick="go('progress')">Choose your topics</button>
     </div>
     <div style="font-size:12px;color:var(--t3);margin-top:14px">${CARDS.length} flashcards ready · ${daysToExam()} days to your exam</div>
@@ -919,10 +799,6 @@ function renderHome(){
         <div class="flex items-center justify-between mb-8">
           <div style="font-size:13px;font-weight:600">Total cards reviewed</div>
           <div style="font-size:13px;font-weight:700">${totalReviewed}</div>
-        </div>
-        <div class="flex items-center justify-between mb-8">
-          <div style="font-size:13px;font-weight:600">Written Qs answered</div>
-          <div style="font-size:13px;font-weight:700">${studyStats.writtenAnswered||0}</div>
         </div>
         <div class="flex items-center justify-between">
           <div style="font-size:13px;font-weight:600">Cards today</div>
@@ -1155,360 +1031,9 @@ function renderFCComplete(total){
     </div>
     <div class="flex gap-12" style="justify-content:center;flex-wrap:wrap">
       ${dueLeft>0?`<button class="btn btn-primary" onclick="resetFC()">Continue — next ${nextBatch}</button>`:`<button class="btn btn-primary" onclick="go('home')">Back to dashboard</button>`}
-      <button class="btn btn-ghost" onclick="go('practice')">Try practice Qs</button>
+      <button class="btn btn-ghost" onclick="go('progress')">Review topics</button>
     </div>
   </div>`;
-}
-
-// ========================
-// PRACTICE
-// ========================
-function renderPractice(){
-  if(state.module==='CS1B'){
-    return renderRPractice();
-  }
-  return renderWrittenPractice();
-}
-
-function renderWrittenPractice(){
-  const qs=filteredQuestions();
-  if(qs.length===0){
-    return `<div class="card" style="text-align:center;padding:60px 40px">
-      <div style="font-size:16px;font-weight:600;margin-bottom:8px">No questions available</div>
-      <div class="text-sm text-secondary mb-16">Check your study pool or select a different module.</div>
-      <button class="btn btn-primary" onclick="go('progress')">Manage study pool</button>
-    </div>`;
-  }
-
-  if(state.paStatus==='complete'){
-    return renderPAComplete(qs.length);
-  }
-
-  const idx=Math.min(state.paIndex,qs.length-1);
-  const q=qs[idx];
-
-  // QW-7: per-question countdown timer (hidden when exam mode active — exam timer takes over)
-  const _qRem=!state.examMode&&(state.paStatus==='idle'||state.paStatus==='answering')&&state.paQStartTime&&state.paQDuration
-    ?Math.max(0,state.paQDuration-Math.floor((Date.now()-state.paQStartTime)/1000))
-    :null;
-  const _qPct=state.paQDuration>0&&_qRem!==null?(state.paQDuration-_qRem)/state.paQDuration:0;
-  const _qColor=_qPct>=0.8?'#C94040':_qPct>=0.5?'#C97B30':'#2E9C8E';
-  const _qFmt=_qRem!==null?`${Math.floor(_qRem/60)}:${String(_qRem%60).padStart(2,'0')}`:'';
-
-  return `
-  ${renderExamTimer()}
-  <div class="flex items-center justify-between mb-16">
-    <div class="flex items-center gap-8">
-      ${state.aiGenerating
-        ?`<span class="badge" style="background:var(--tint-blue);color:#3D6FD1">✨ Generating question…</span>`
-        :`<button class="btn btn-ghost btn-sm" onclick="generateWrittenQ()" style="gap:5px">✨ Generate AI question</button>`}
-      ${state.aiGenError?`<span style="font-size:12px;color:#C94040">${escHtml(state.aiGenError)}</span>`:''}
-    </div>
-    <span style="font-size:12px;color:${loadAIKey()?'#2E9C8E':'#3D6FD1'};cursor:pointer;font-weight:500" onclick="openKeyModal()">${loadAIKey()?'⚙ API key saved':'⚙ Add API key'}</span>
-  </div>
-  ${state.paReviewRound?`<div style="background:var(--tint-amber);border:1px solid #F0C080;border-radius:10px;padding:10px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px">
-    <span style="font-size:16px">🔁</span>
-    <div>
-      <div style="font-size:13px;font-weight:600;color:#C97B30">Review round — questions you found difficult</div>
-      <div style="font-size:12px;color:var(--t2)">${qs.length} question${qs.length!==1?'s':''} to retry</div>
-    </div>
-  </div>`:''}
-  <div class="flex items-center justify-between mb-20 pa-meta">
-    <div class="flex items-center gap-12">
-      <div class="text-sm text-secondary">Question ${idx+1} of ${qs.length}</div>
-      ${state.paStartTime?`<div class="text-sm text-secondary" id="pa-elapsed" style="font-variant-numeric:tabular-nums">⏱ ${fmtElapsed(Date.now()-state.paStartTime)}</div>`:''}
-      ${_qRem!==null?`<span id="pa-countdown" style="font-size:12px;font-weight:600;color:${_qColor};font-variant-numeric:tabular-nums">${_qFmt} left</span>`:''}
-    </div>
-    <div class="flex items-center gap-8">
-      ${q.ai?`<span class="badge" style="background:var(--tint-blue);color:#3D6FD1">✨ AI</span>`:''}
-      <span class="badge" style="background:${q.chip}18;color:${q.chip}">${q.code}</span>
-      <span class="badge" style="background:var(--s2);color:var(--t2)">${q.marks} marks</span>
-      <span class="badge" style="background:var(--s2);color:var(--t2)" title="Suggested time at ~1.8 min/mark">${Math.round(q.marks*1.8)} min</span>
-      <button class="btn btn-ghost btn-sm" onclick="resetPA()">Restart</button>
-    </div>
-  </div>
-
-  <div class="card mb-16 stem-card" style="border-left:4px solid ${q.chip}">
-    <div class="text-xs mb-8" style="font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:${q.chip}">${q.topic}</div>
-    <div class="pa-stem">${renderMd(q.stem,!q.ai,'lines')}</div>
-  </div>
-
-  ${state.paStatus==='idle'||state.paStatus==='answering'?`
-  <div class="card mb-16">
-    <div class="flex items-center justify-between mb-10">
-      <div style="font-size:13px;font-weight:600">Your answer</div>
-      <button class="btn btn-ghost btn-sm" onclick="togglePAPreview()">${state.paPreview?'✏ Edit':'👁 Preview'}</button>
-    </div>
-    ${state.paPreview
-      ?`<div id="pa-preview" class="rd" style="padding:12px 14px;background:#F8F9FB;border-radius:8px;min-height:120px">${state.paText?renderMd(state.paText):'<span style="color:var(--t2)">Nothing to preview yet</span>'}</div>`
-      :`<textarea id="pa-answer" rows="7" placeholder="Write your answer here… (use $…$ for inline LaTeX)" oninput="state.paText=this.value">${escHtml(state.paText)}</textarea>`
-    }
-    <div class="flex items-center justify-between" style="margin-top:12px">
-      <div class="text-xs text-secondary">Write a full exam-style answer</div>
-      <button class="btn btn-primary" onclick="submitPA()">Submit</button>
-    </div>
-  </div>`:''}
-
-  ${state.paStatus==='submitted'?`
-  <div class="card mb-16" id="pa-result">
-    <div style="font-size:13px;font-weight:600;margin-bottom:10px">Your answer</div>
-    <div class="rd" style="padding:12px 14px;background:#F8F9FB;border-radius:8px;white-space:pre-wrap">${escHtml(state.paText)||'<span style="color:var(--t2)">No answer written</span>'}</div>
-  </div>
-
-  <div class="card mb-16" style="border-left:3px solid #3D6FD1">
-    <div style="font-size:13px;font-weight:600;color:#3D6FD1;margin-bottom:10px">Model answer</div>
-    <div class="rd">${renderMd(q.model,!q.ai,'bullets')}</div>
-  </div>
-
-  <div class="card">
-    ${loadAIKey()?`
-    <div style="font-size:13px;font-weight:600;margin-bottom:4px">AI marking</div>
-    <div class="text-xs text-secondary mb-12">Gemini will read your answer and score it against the model</div>
-    ${state.aiMarking?`
-      <div style="display:flex;align-items:center;gap:10px;padding:14px;background:var(--s2);border-radius:8px">
-        <div style="width:18px;height:18px;border:2.5px solid #3D6FD1;border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite;flex-shrink:0"></div>
-        <span style="font-size:13px;color:var(--t2)">Marking your answer…</span>
-      </div>`:`
-      <button class="btn btn-primary" onclick="aiMarkAnswer()">✨ Mark my answer</button>
-      <div class="verdict-row" style="margin-top:12px">
-        <button class="verdict-btn v-incorrect" onclick="gradePA('incorrect')" style="font-size:12px;padding:6px 14px">Skip — Incorrect</button>
-        <button class="verdict-btn v-partial" onclick="gradePA('partial')" style="font-size:12px;padding:6px 14px">Skip — Partial</button>
-        <button class="verdict-btn v-correct" onclick="gradePA('correct')" style="font-size:12px;padding:6px 14px">Skip — Correct</button>
-      </div>`}`:`
-    <div style="font-size:13px;font-weight:600;margin-bottom:12px">How did you do?</div>
-    <div class="text-xs text-secondary mb-12">Add a Gemini API key to get AI marking instead</div>
-    <div class="verdict-row">
-      <button class="verdict-btn v-incorrect" onclick="gradePA('incorrect')">Incorrect</button>
-      <button class="verdict-btn v-partial" onclick="gradePA('partial')">Partial</button>
-      <button class="verdict-btn v-correct" onclick="gradePA('correct')">Correct</button>
-    </div>`}
-  </div>`:''}
-
-  ${state.paStatus==='graded'?`
-  <div class="card mb-16">
-    <div style="font-size:13px;font-weight:600;margin-bottom:10px">Your answer</div>
-    <div class="rd" style="padding:12px 14px;background:#F8F9FB;border-radius:8px;white-space:pre-wrap">${escHtml(state.paText)||'<span style="color:var(--t2)">No answer written</span>'}</div>
-  </div>
-  <div class="card mb-16" style="border-left:3px solid #3D6FD1">
-    <div style="font-size:13px;font-weight:600;color:#3D6FD1;margin-bottom:10px">Model answer</div>
-    <div class="rd">${renderMd(q.model,!q.ai,'bullets')}</div>
-  </div>
-  ${state.paAIFeedback?`
-  <div class="card mb-16" style="border-left:3px solid #6B5DD3">
-    <div style="font-size:13px;font-weight:600;color:#6B5DD3;margin-bottom:8px">✨ AI feedback</div>
-    <div class="rd">${renderMd(state.paAIFeedback)}</div>
-  </div>`:''}
-  <div class="flex items-center justify-between">
-    <div class="flex items-center gap-8">
-      ${verdictBadge(state.paVerdict)}
-      <span class="text-sm text-secondary">Score: ${state.paScore} / ${qs.reduce((a,q)=>a+q.marks,0)}</span>
-    </div>
-    <button class="btn btn-primary" onclick="nextPA()">Next question →</button>
-  </div>`:''}`;
-}
-
-function verdictBadge(v){
-  if(!v)return '';
-  const map={incorrect:['#FDF2F2','#C94040','Incorrect'],partial:['#FDF7F0','#C97B30','Partial'],correct:['#F0FAF8','#2E9C8E','Correct']};
-  const [bg,color,label]=map[v]||['#F5F6F8','#616B7A',v];
-  return `<span class="badge" style="background:${bg};color:${color}">${label}</span>`;
-}
-
-function renderPAComplete(total){
-  const totalMarks=filteredQuestions().reduce((a,q)=>a+q.marks,0);
-  const pct=totalMarks>0?Math.round(state.paScore/totalMarks*100):0;
-  return `<div class="card" style="text-align:center;padding:60px 40px;max-width:500px;margin:0 auto">
-    <div style="font-size:40px;margin-bottom:16px">${pct>=70?'🌟':pct>=50?'👍':'📚'}</div>
-    <div style="font-size:20px;font-weight:700;margin-bottom:8px">Session complete!</div>
-    <div style="font-size:32px;font-weight:700;color:#3D6FD1;margin:16px 0">${state.paScore} / ${totalMarks}</div>
-    <div class="text-sm text-secondary mb-24">${pct}% — ${pct>=70?'Excellent work!':pct>=50?'Good effort — keep reviewing!':'Keep practising — you\'ll get there!'}</div>
-    <div class="flex gap-12" style="justify-content:center">
-      <button class="btn btn-ghost" onclick="resetPA()">Try again</button>
-      <button class="btn btn-primary" onclick="go('flashcards')">Review flashcards</button>
-    </div>
-  </div>`;
-}
-
-// ========================
-// R PRACTICE
-// ========================
-function renderRPractice(){
-  const rqs=filteredRQ();
-  if(rqs.length===0){
-    return `
-    <div class="flex items-center justify-between mb-20">
-      <div class="flex items-center gap-8">
-        ${state.aiGenerating
-          ?`<span class="badge" style="background:var(--tint-blue);color:#3D6FD1">✨ Generating…</span>`
-          :`<button class="btn btn-primary" onclick="generateRQ()">✨ Generate AI question</button>`}
-        ${state.aiGenError?`<span style="font-size:12px;color:#C94040">${escHtml(state.aiGenError)}</span>`:''}
-      </div>
-      <span style="font-size:12px;color:${loadAIKey()?'#2E9C8E':'#3D6FD1'};cursor:pointer;font-weight:500" onclick="openKeyModal()">${loadAIKey()?'⚙ API key saved':'⚙ Add API key'}</span>
-    </div>
-    <div class="card" style="text-align:center;padding:40px">
-      <div style="font-size:16px;font-weight:600;margin-bottom:8px">No R questions in pool</div>
-      <div class="text-sm text-secondary mb-16">Generate one with AI above, or enable CS1B subtopics in your study pool.</div>
-      <button class="btn btn-ghost btn-sm" onclick="go('progress')">Manage study pool</button>
-    </div>`;
-  }
-  const idx=Math.min(state.rIndex,rqs.length-1);
-  const rq=rqs[idx];
-  const defaultCode=(rq.setup?rq.setup+'\n':'')+rq.starter;
-  const code=state.rCode!==null?state.rCode:defaultCode;
-
-  let statusBadge='';
-  if(state.rStatus==='loading') statusBadge=`<span class="badge" style="background:var(--tint-amber);color:#C97B30"><span style="display:inline-block;width:10px;height:10px;border:2px solid #C97B30;border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:4px"></span>R initialising…</span>`;
-  else if(state.rStatus==='ready') statusBadge=`<span class="badge" style="background:var(--tint-teal);color:#2E9C8E">R ready</span>`;
-  else if(state.rStatus==='error') statusBadge=`<span class="badge" style="background:var(--tint-red);color:#C94040">R unavailable</span>`;
-
-  const isAI = !!rq.ai;
-
-  return `
-  <div class="flex items-center justify-between mb-16">
-    <div class="flex items-center gap-8">
-      ${state.aiGenerating
-        ?`<span class="badge" style="background:var(--tint-blue);color:#3D6FD1">✨ Generating…</span>`
-        :`<button class="btn btn-ghost btn-sm" onclick="generateRQ()">✨ Generate AI question</button>`}
-      ${state.aiGenError?`<span style="font-size:12px;color:#C94040">${escHtml(state.aiGenError)}</span>`:''}
-    </div>
-    <span style="font-size:12px;color:${loadAIKey()?'#2E9C8E':'#3D6FD1'};cursor:pointer;font-weight:500" onclick="openKeyModal()">${loadAIKey()?'⚙ API key saved':'⚙ Add API key'}</span>
-  </div>
-
-  <div class="flex items-center justify-between mb-16">
-    <div class="text-sm text-secondary">R Question ${idx+1} of ${rqs.length}</div>
-    <div class="flex items-center gap-8">
-      ${isAI?`<span class="badge" style="background:var(--tint-blue);color:#3D6FD1">✨ AI</span>`:''}
-      <span class="badge" style="background:#2E9C8E18;color:#2E9C8E">CS1B</span>
-      <span class="badge" style="background:var(--s2);color:var(--t2)">${rq.marks} marks</span>
-      ${statusBadge}
-    </div>
-  </div>
-
-  <div class="card mb-16 stem-card" style="border-left:4px solid #2E9C8E">
-    <div class="flex items-center justify-between mb-8">
-      <div class="text-xs" style="font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#2E9C8E">${rq.topic}</div>
-    </div>
-    <div class="pa-stem">${renderMd(rq.prompt,!rq.ai,'lines')}</div>
-    ${isAI?`
-    <div style="margin-top:14px;padding:10px 14px;background:#1E1E2E;border-radius:8px">
-      <div class="text-xs" style="color:#6C7086;font-weight:600;margin-bottom:6px;font-family:'JetBrains Mono',monospace">SETUP CODE (auto-runs before your code)</div>
-      <pre style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#A6E3A1;white-space:pre-wrap;margin:0">${escHtml(rq.setup)}</pre>
-    </div>`:`
-    <div style="margin-top:14px">
-      <div class="text-xs text-secondary mb-6" style="font-weight:600">Data preview</div>
-      <div style="overflow-x:auto">
-        <table style="font-family:'JetBrains Mono',monospace;font-size:12px;border-collapse:collapse">
-          <tr>${rq.preview.cols.map(c=>`<th style="padding:4px 10px;text-align:left;color:var(--t2);font-weight:600;border-bottom:1px solid var(--border)">${escHtml(String(c))}</th>`).join('')}</tr>
-          ${rq.preview.rows.map(r=>`<tr>${r.map(v=>`<td style="padding:4px 10px;border-bottom:1px solid #F5F6F8">${escHtml(String(v))}</td>`).join('')}</tr>`).join('')}
-          <tr><td colspan="${rq.preview.cols.length}" style="padding:4px 10px;color:var(--t2);font-size:11px">…</td></tr>
-        </table>
-      </div>
-    </div>`}
-  </div>
-
-  <div class="rs-ide" style="height:560px">
-    <!-- Global toolbar -->
-    <div class="rs-toolbar">
-      <div class="rs-toolbar-left">
-        <div class="rs-toolbar-dot" style="background:#FF5F57"></div>
-        <div class="rs-toolbar-dot" style="background:#FEBC2E"></div>
-        <div class="rs-toolbar-dot" style="background:#28C840"></div>
-        <span style="color:#585B70;font-size:11.5px;margin-left:6px">script.R</span>
-        <span style="color:#45475A;font-size:10.5px">— Q${idx+1} of ${rqs.length}</span>
-      </div>
-      <div class="flex items-center gap-8">
-        ${state.rStatus==='idle'?`<button class="rs-btn rs-btn-run" onclick="loadWebR()">⚡ Start R</button>`:''}
-        ${state.rStatus==='loading'?`<span class="rs-status rs-status-loading">● R initialising…</span>`:''}
-        ${state.rStatus==='ready'?`
-          <button class="rs-btn rs-btn-ghost" onclick="resetRCode()">↺ Reset</button>
-          <button class="rs-btn rs-btn-run" onclick="runRCode()" ${state.rRunning?'disabled':''}>
-            ${state.rRunning?'<span style="opacity:.7">⏳</span> Running…':'▶ Run'}
-          </button>
-          <span class="rs-status rs-status-ready">● R ${state.rRunning?'running':'ready'}</span>`:''}
-        ${state.rStatus==='error'?`<span class="rs-status rs-status-error">● R error</span>`:''}
-      </div>
-    </div>
-    <!-- 4-panel body -->
-    <div class="rs-body" style="flex:1;min-height:0">
-      <!-- LEFT: Editor + Console -->
-      <div class="rs-left">
-        <!-- Editor panel (top-left) -->
-        <div class="rs-panel-bar" style="flex-shrink:0">
-          <span class="rs-panel-tab rs-panel-tab-blue">Script</span>
-          <span style="color:#45475A;font-size:10px">${rq.topic}</span>
-        </div>
-        <div class="rs-editor-body" style="flex:3;min-height:0">
-          <div class="rs-gutter" id="rs-gutter"></div>
-          <div class="rs-code-wrap">
-            <pre id="r-code-pre" aria-hidden="true"></pre>
-            <textarea id="r-code-ta" spellcheck="false" onscroll="syncScrollTA()" placeholder="# Write your R code here…"></textarea>
-          </div>
-        </div>
-        <!-- Console panel (bottom-left) -->
-        <div style="flex:2;display:flex;flex-direction:column;border-top:1px solid #313244;min-height:0">
-          <div class="rs-panel-bar" style="flex-shrink:0">
-            <span class="rs-panel-tab rs-panel-tab-orange">Console</span>
-            ${state.rOutput.length>0?`<button class="rs-panel-action" onclick="state.rOutput=[];state.rEnv=[];render()">✕ clear</button>`:''}
-          </div>
-          <div class="rs-console-body" id="r-console">
-            ${state.rOutput.length===0
-              ?`<span class="rs-empty-msg">${state.rStatus==='idle'?'Click ⚡ Start R to initialise the engine, then ▶ Run to execute your code.':'Ready — press ▶ Run to execute.'}</span>`
-              :state.rOutput.map(l=>`<div class="${l.type==='error'?'r-err-line':'r-out-line'}"><span class="rs-prompt">&gt;</span> ${escHtml(l.text)}</div>`).join('')}
-          </div>
-        </div>
-      </div>
-      <!-- RIGHT: Environment + Plots -->
-      <div class="rs-right">
-        <!-- Environment panel (top-right) -->
-        <div style="flex:1;display:flex;flex-direction:column;border-bottom:1px solid #313244;min-height:0">
-          <div class="rs-panel-bar" style="flex-shrink:0">
-            <span class="rs-panel-tab rs-panel-tab-purple">Environment</span>
-            ${state.rEnv.length>0?`<span style="color:#45475A;font-size:10px">${state.rEnv.length} object${state.rEnv.length!==1?'s':''}</span>`:''}
-          </div>
-          <div class="rs-env-body">
-            ${state.rEnv.length===0
-              ?`<div class="rs-env-empty">No variables yet — run your code to populate the environment.</div>`
-              :state.rEnv.map(v=>`
-                <div class="rs-env-row">
-                  <span class="rs-env-name">${escHtml(v.name)}</span>
-                  <span class="rs-env-type">${escHtml(v.type)}</span>
-                  <span class="rs-env-val">${escHtml(v.val)}</span>
-                </div>`).join('')}
-          </div>
-        </div>
-        <!-- Plots panel (bottom-right) -->
-        <div style="flex:1;display:flex;flex-direction:column;min-height:0">
-          <div class="rs-panel-bar" style="flex-shrink:0">
-            <span class="rs-panel-tab rs-panel-tab-green">Plots</span>
-            ${state.rImages.length>0?`<span style="color:#45475A;font-size:10px">${state.rImages.length} plot${state.rImages.length!==1?'s':''}</span>`:''}
-          </div>
-          <div class="rs-plots-body">
-            ${state.rImages.length===0
-              ?`<span class="rs-plots-empty">Plots will appear here when your code calls plot(), hist(), etc.</span>`
-              :state.rImages.map(src=>`<img src="${src}" alt="R plot" style="max-width:100%">`).join('')}
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="flex gap-10 mb-16">
-    <button class="btn btn-ghost btn-sm" onclick="toggleHint()">${state.showHint?'Hide hint':'Show hint'}</button>
-    <button class="btn btn-ghost btn-sm" onclick="toggleModelR()">${state.showModel?'Hide model answer':'Show model answer'}</button>
-    ${idx<rqs.length-1?`<button class="btn btn-ghost btn-sm" onclick="nextRQ()">Next question →</button>`:''}
-  </div>
-
-  ${state.showHint?`
-  <div class="card mb-12" style="border-left:3px solid #C97B30">
-    <div style="font-size:13px;font-weight:600;color:#C97B30;margin-bottom:8px">Hint</div>
-    <div class="rd">${renderMd(rq.hint,true,'lines')}</div>
-  </div>`:''}
-
-  ${state.showModel?`
-  <div class="card" style="border-left:3px solid #3D6FD1">
-    <div style="font-size:13px;font-weight:600;color:#3D6FD1;margin-bottom:8px">Model answer</div>
-    <pre style="font-family:'JetBrains Mono',monospace;font-size:12.5px;line-height:1.6;white-space:pre-wrap;color:var(--t1)">${escHtml(rq.model)}</pre>
-  </div>`:''}`;
 }
 
 // ========================
@@ -1529,29 +1054,9 @@ function renderProgress(){
   SYLLABUS.forEach(c=>c.topics.forEach(t=>t.subs.forEach(s=>allSubs.push(s.id))));
   const checked=allSubs.filter(id=>pool[id]).length;
 
-  // Render recent written question history
-  const whEntries=Object.values(writtenHistory).sort((a,b)=>b.timestamp.localeCompare(a.timestamp)).slice(0,8);
-  const whHtml=whEntries.length===0?'':`
-  <div class="card mb-16">
-    <div class="flex items-center justify-between mb-12">
-      <div style="font-size:14px;font-weight:600">Recent written questions</div>
-      <div class="text-xs text-secondary">${whEntries.length} shown</div>
-    </div>
-    ${whEntries.map(e=>{
-      const vmap={correct:['#F0FAF8','#2E9C8E','Correct'],partial:['#FDF7F0','#C97B30','Partial'],incorrect:['#FDF2F2','#C94040','Incorrect']};
-      const [bg,col,lbl]=vmap[e.verdict]||['#F5F6F8','#616B7A',e.verdict];
-      const dt=new Date(e.timestamp).toLocaleDateString('en-GB',{day:'numeric',month:'short'});
-      return `<div class="danger-row" style="gap:8px">
-        <span class="badge" style="background:${bg};color:${col};flex-shrink:0">${lbl}</span>
-        <div style="flex:1;font-size:12.5px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical">${escHtml(e.stem||e.topic)}</div>
-        <span class="text-xs text-secondary" style="flex-shrink:0">${e.score}/${e.maxMarks} · ${dt}</span>
-      </div>`;
-    }).join('')}
-  </div>`;
-
   return `
   <div class="flex items-center justify-between mb-20">
-    <div class="text-sm text-secondary">${checked} / ${allSubs.length} subtopics covered in notes · Flashcards &amp; practice draw only from ticked sections</div>
+    <div class="text-sm text-secondary">${checked} / ${allSubs.length} subtopics covered in notes · Flashcards draw only from ticked sections</div>
     <div class="flex gap-8">
       <button class="btn btn-ghost btn-sm" onclick="poolAll(true)">Tick all</button>
       <button class="btn btn-ghost btn-sm" style="color:#C94040" onclick="poolAll(false)">Clear all</button>
@@ -1560,7 +1065,6 @@ function renderProgress(){
 
   ${renderTrends()}
   ${renderMilestones()}
-  ${whHtml}
 
   ${SYLLABUS.map(course=>{
     const coursePct=avgMastery(course);
@@ -1652,27 +1156,13 @@ function avgMastery(course){
 window.go=function(view){
   state.view=view;
   if(view==='flashcards'){state.fcIndex=0;state.fcFlipped=false;state.fcWeakQueue=[];state.fcReviewRound=false;state.fcTotalReviewed=0;buildDecks();}
-  if(view==='practice'){
-    state.paIndex=0;state.paText='';state.paStatus='idle';state.paVerdict=null;state.paScore=0;state.paWeakQueue=[];state.paReviewRound=false;state.paPreview=false;
-    stopPATimer();buildDecks();startPATimer();
-    if(state.module==='CS1B') initWebR(); // QW-5: auto-init R
-    // QW-7: start countdown for first question
-    if(state.module!=='CS1B'&&state.paDeck.length>0){state.paQStartTime=Date.now();state.paQDuration=Math.round(state.paDeck[0].marks*1.8)*60;}
-  }
-  if(view!=='practice'){stopPATimer();state.paQStartTime=null;state.paQDuration=0;} // QW-7: clear countdown
   render();
 };
 
 window.setModule=function(mod){
   state.module=mod;
   state.fcIndex=0;state.fcFlipped=false;state.fcWeakQueue=[];state.fcReviewRound=false;
-  state.paIndex=0;state.paText='';state.paStatus='idle';state.paVerdict=null;state.paScore=0;state.paWeakQueue=[];state.paReviewRound=false;state.paPreview=false;stopPATimer();
-  state.rIndex=0;state.rCode=null;state.rOutput=[];state.rImages=[];state.rRan=false;state.showHint=false;state.showModel=false;
-  state.paQStartTime=null;state.paQDuration=0; // QW-7: reset countdown
   buildDecks();
-  if(mod==='CS1B'&&state.view==='practice') initWebR(); // QW-5: auto-init R
-  // QW-7: start countdown for first written question
-  if(mod!=='CS1B'&&state.view==='practice'&&state.paDeck.length>0){state.paQStartTime=Date.now();state.paQDuration=Math.round(state.paDeck[0].marks*1.8)*60;startPATimer();}
   render();
 };
 
@@ -1734,224 +1224,6 @@ window.undoRating=function(){
   state.fcIndex=u.index;state.fcReviewRound=u.review;state.fcTotalReviewed=u.total;
   state.fcFlipped=true;state.fcUndo=null;
   render();showToast('Undid last rating');
-};
-
-window.submitPA=function(){
-  if(!state.paText.trim()){
-    const ta=document.getElementById('pa-answer');
-    if(ta){ta.style.borderColor='#C94040';ta.focus();setTimeout(()=>{ta.style.borderColor='';},1200);}
-    return;
-  }
-  state.paStatus='submitted';
-  state.paQStartTime=null; // QW-7: pause countdown on submit
-  render();
-  requestAnimationFrame(()=>{
-    const target=document.getElementById('pa-result');
-    if(target) target.scrollIntoView({behavior:'smooth',block:'start'});
-  });
-};
-
-window.gradePA=function(verdict){
-  state.paVerdict=verdict;
-  const qs=filteredQuestions();
-  const idx=Math.min(state.paIndex,qs.length-1);
-  const q=qs[idx];
-  const marks=q.marks;
-  const add=verdict==='correct'?marks:verdict==='partial'?Math.round(marks/2):0;
-  state.paScore+=add;
-  if(verdict==='incorrect'||verdict==='partial') state.paWeakQueue.push(q);
-  state.paStatus='graded';
-  studyStats.writtenAnswered=(studyStats.writtenAnswered||0)+1;
-  saveStudyStats();
-  recordDailySnapshot();checkMilestones();
-  // Save to written history (Issue-04)
-  const qid=_qHash(q);
-  writtenHistory[qid]={timestamp:new Date().toISOString(),verdict,score:add,maxMarks:marks,topic:q.topic||'',stem:(q.stem||'').slice(0,120),answer:state.paText.slice(0,500)};
-  saveWrittenHistory();
-  // Update mastery via same SM-2 logic as flashcards (Issue-06)
-  if(q.sub&&q.sub!=='ai') recordCardRating(q.sub, verdict==='correct'?'good':verdict==='partial'?'hard':'again');
-  render();
-};
-
-window.nextPA=function(){
-  const qs=filteredQuestions();
-  state.paIndex++;
-  state.paText='';
-  state.paVerdict=null;
-  state.paAIFeedback='';
-  state.aiMarking=false;
-  state.paPreview=false;
-  if(state.paIndex>=qs.length){
-    if(state.paWeakQueue.length>0){
-      state.paReviewRound=true;
-      state.paDeck=[...state.paWeakQueue];
-      state.paWeakQueue=[];
-      state.paIndex=0;
-      state.paStatus='idle';
-      const _nq=filteredQuestions()[0];if(_nq){state.paQStartTime=Date.now();state.paQDuration=Math.round(_nq.marks*1.8)*60;} // QW-7
-      startPATimer(); // interval self-cleared on submit — restart it
-    }else{
-      state.paStatus='complete';
-      state.paQStartTime=null;state.paQDuration=0; // QW-7
-    }
-  }else{
-    state.paStatus='idle';
-    const _nq2=filteredQuestions()[state.paIndex];if(_nq2){state.paQStartTime=Date.now();state.paQDuration=Math.round(_nq2.marks*1.8)*60;} // QW-7
-    startPATimer(); // interval self-cleared on submit — restart it
-  }
-  render();
-};
-
-window.aiMarkAnswer=async function(){
-  if(state.aiMarking) return;
-  const qs=filteredQuestions();
-  const q=qs[Math.min(state.paIndex,qs.length-1)];
-  const studentAnswer=state.paText.trim();
-  if(!studentAnswer){ alert('No answer to mark.'); return; }
-  state.aiMarking=true; render();
-  try {
-    const prompt=`You are an IFoA examiner marking a student's written answer.
-
-Question (${q.marks} marks): ${q.stem||q.prompt}
-
-Model answer: ${q.model}
-
-Student's answer: ${studentAnswer}
-
-Mark this answer strictly but fairly as an IFoA examiner would.
-Return ONLY a valid JSON object with no markdown:
-{"grade":"Correct"|"Partial"|"Incorrect","marks_awarded":number,"feedback":"2-3 sentences: what the student got right, what key points were missing or wrong, and one specific thing to focus on next time"}`;
-    const raw=await callGemini(prompt);
-    let result;
-    try { result=JSON.parse(raw.replace(/```json\n?|\n?```/g,'').trim()); }
-    catch(e){ result={grade:'Partial',marks_awarded:Math.round(q.marks/2),feedback:raw.slice(0,300)}; }
-    const grade=(result.grade||'').toLowerCase();
-    const verdict=grade==='correct'?'correct':grade==='incorrect'?'incorrect':'partial';
-    state.paAIFeedback=result.feedback||'';
-    state.aiMarking=false;
-    // apply grade
-    const add=verdict==='correct'?q.marks:verdict==='partial'?Math.round(q.marks/2):0;
-    state.paScore+=add;
-    if(verdict==='incorrect'||verdict==='partial') state.paWeakQueue.push(q);
-    state.paVerdict=verdict;
-    state.paStatus='graded';
-    studyStats.writtenAnswered=(studyStats.writtenAnswered||0)+1;
-    saveStudyStats();
-    recordDailySnapshot();checkMilestones();
-    // Save to written history and update mastery (Issues 04 + 06)
-    const qid=_qHash(q);
-    writtenHistory[qid]={timestamp:new Date().toISOString(),verdict,score:add,maxMarks:q.marks,topic:q.topic||'',stem:(q.stem||'').slice(0,120),answer:studentAnswer.slice(0,500)};
-    saveWrittenHistory();
-    if(q.sub&&q.sub!=='ai') recordCardRating(q.sub, verdict==='correct'?'good':verdict==='partial'?'hard':'again');
-    render();
-    requestAnimationFrame(()=>{
-      const t=document.getElementById('pa-result');
-      if(t) t.scrollIntoView({behavior:'smooth',block:'start'});
-    });
-  } catch(e) {
-    state.aiMarking=false;
-    state.paAIFeedback='';
-    alert('AI marking failed: '+(e.message||'unknown error')+'. Use manual grading below.');
-    render();
-  }
-};
-
-window.resetPA=function(){stopPATimer();startPATimer();
-  state.paIndex=0;state.paText='';state.paStatus='idle';state.paVerdict=null;state.paScore=0;state.paWeakQueue=[];state.paReviewRound=false;state.paPreview=false;buildDecks();
-  // QW-7: restart countdown for first question
-  if(state.paDeck.length>0){state.paQStartTime=Date.now();state.paQDuration=Math.round(state.paDeck[0].marks*1.8)*60;}
-  render();
-};
-
-window.togglePAPreview=function(){
-  state.paPreview=!state.paPreview;
-  render();
-  // QW-8: trigger MathJax on preview panel
-  if(state.paPreview&&window.MathJax&&MathJax.typesetPromise){
-    setTimeout(()=>MathJax.typesetPromise(['#pa-preview']).catch(()=>{}),50);
-  }
-};
-
-window.loadWebR=function(){
-  initWebR();
-};
-
-window.runRCode=async function(){
-  if(!webRReady||state.rRunning)return;
-  const ta=document.getElementById('r-code-ta');
-  const code=ta?ta.value:(state.rCode||'');
-  state.rRunning=true;state.rOutput=[];state.rImages=[];state.rEnv=[];state.rRan=true;
-  render();
-  try{
-    const result=await webRShelter.captureR(code,{withAutoprint:true,captureStreams:true,captureConditions:true,captureGraphics:{width:560,height:380}});
-    const output=[];
-    for(const ev of result.output){
-      if(ev.type==='stdout'||ev.type==='message') output.push({type:'out',text:ev.data});
-      if(ev.type==='stderr') output.push({type:'error',text:ev.data});
-    }
-    if(output.length===0) output.push({type:'out',text:'Code ran with no output.'});
-    state.rOutput=output;
-    // captureGraphics returns plots as ImageBitmaps — draw to canvas for <img> display
-    try{
-      if(result.images&&result.images.length>0){
-        state.rImages=result.images.map(img=>{
-          const cv=document.createElement('canvas');
-          cv.width=img.width;cv.height=img.height;
-          cv.getContext('2d').drawImage(img,0,0);
-          return cv.toDataURL('image/png');
-        });
-      }
-    }catch(e){}
-    // Capture environment
-    try{
-      const envR=await webR.evalR(`
-      local({
-        nms <- ls(envir=globalenv())
-        nms <- nms[!startsWith(nms,'.')]
-        if(length(nms)==0) character(0) else sapply(nms, function(nm){
-          obj <- get(nm, envir=globalenv())
-          tp <- class(obj)[1]
-          vl <- tryCatch({
-            if(is.data.frame(obj)) paste0(nrow(obj),' x ',ncol(obj),' [',paste(names(obj),collapse=', '),']')
-            else if(is.numeric(obj)&&length(obj)<=8) paste(round(obj,3),collapse='  ')
-            else if(is.numeric(obj)) paste0('num[',length(obj),'] ',paste(round(head(obj,4),3),collapse=' '),' ...')
-            else if(is.character(obj)&&length(obj)<=4) paste('"',obj,'"',sep='',collapse=' ')
-            else if(is.list(obj)) paste0('List of ',length(obj))
-            else paste0('[',length(obj),']')
-          }, error=function(e) '?')
-          paste0(nm,'|||',tp,'|||',vl)
-        })
-      })
-      `);
-      const rows=await envR.toJs();
-      if(rows&&rows.values&&rows.values.length>0){
-        state.rEnv=rows.values.filter(Boolean).map(s=>{
-          const p=s.split('|||');
-          return {name:p[0]||'',type:p[1]||'',val:p[2]||''};
-        });
-      }
-    }catch(e){}
-  }catch(e){
-    state.rOutput=[{type:'error',text:String(e)}];
-  }
-  state.rRunning=false;
-  render();
-};
-
-window.syncScrollTA=function(){
-  const ta=document.getElementById('r-code-ta');
-  const pre=document.getElementById('r-code-pre');
-  if(ta&&pre){pre.scrollTop=ta.scrollTop;pre.scrollLeft=ta.scrollLeft;}
-};
-
-window.resetRCode=function(){state.rCode=null;state.rOutput=[];state.rImages=[];state.rEnv=[];state.rRan=false;render();};
-window.toggleHint=function(){state.showHint=!state.showHint;render();};
-window.toggleModelR=function(){state.showModel=!state.showModel;render();};
-window.nextRQ=function(){
-  const rqs=filteredRQ();
-  state.rIndex=Math.min(state.rIndex+1,rqs.length-1);
-  state.rCode=null;state.rOutput=[];state.rImages=[];state.rEnv=[];state.rRan=false;state.showHint=false;state.showModel=false;
-  render();
 };
 
 window.toggleTopic=function(id){
@@ -2075,13 +1347,10 @@ window.toggleChip=function(dayIndex,chipIndex,val){
 };
 
 window.startFromChip=function(modId,type){
-  state.module=modId;
-  if(type==='flashcards'){
+  state.module=examOf(modId)||'ALL';
+  if(modId){
     state.fcIndex=0;state.fcFlipped=false;
     go('flashcards');
-  }else if(type==='practice'){
-    state.paIndex=0;state.paText='';state.paStatus='idle';state.paVerdict=null;state.paScore=0;
-    go('practice');
   }else{
     go('home');
   }
@@ -2261,163 +1530,6 @@ function renderMd(text,plain,chunk){
 }
 
 // ========================
-// AI QUESTION GENERATION
-// ========================
-function loadAIKey(){ try{return localStorage.getItem('tabula_ai_key')||'';}catch(e){return '';} }
-function saveAIKey(k){ try{localStorage.setItem('tabula_ai_key',k);}catch(e){} }
-
-const MODULE_CONTEXT = {
-  'CM1A':'Theory of interest rates (force of interest, nominal/effective conversion, annuities, perpetuities, duration, immunisation, spot/forward rates) and equation of value (loans, bonds, shares, IRR/NPV)',
-  'CM1B':'Decrement models, life tables, survival functions, force of mortality, multi-state Markov models, EPV of assurances and annuities, gross premiums, prospective/retrospective reserves, profit testing',
-  'CS1A':'Data analysis (EDA, PCA, correlation), random variables and distributions (Normal, Poisson, lognormal, exponential, Pareto), statistical inference (MLE, confidence intervals, hypothesis tests, Cramér-Rao bound)',
-  'CS1B':'Linear and multiple regression (OLS, diagnostics, model selection), GLMs (Poisson and gamma with log/reciprocal link), deviance, Bayesian inference with conjugate priors, credibility theory (Bühlmann)',
-  'CB1':'Corporate governance (agency problem, audit), sources of finance (debt, equity, derivatives, tax shield), capital structure (MM, trade-off, pecking order), project appraisal (NPV, IRR, CAPM, WACC), financial accounting (income statement, balance sheet, ratios)',
-};
-
-const R_TOPICS = [
-  'simple linear regression with model summary and diagnostics',
-  'multiple linear regression with stepwise model selection',
-  'Poisson GLM for insurance claim frequency with log-link and offset',
-  'Gamma GLM for claim severity with reciprocal or log link',
-  'nested GLM comparison using deviance and AIC',
-  'bootstrapping a confidence interval for the mean',
-  'Bayesian posterior calculation with conjugate prior (Poisson-Gamma)',
-  'principal component analysis (PCA) with scree plot',
-  'chi-squared goodness-of-fit test for a Poisson distribution',
-  'maximum likelihood estimation using optim()',
-  'correlation analysis: Pearson and Spearman on actuarial data',
-  'one-sample and two-sample t-tests on insurance data',
-];
-
-async function callGemini(prompt){
-  const key=loadAIKey();
-  if(!key) throw new Error('NO_KEY');
-  const resp=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(key)}`,{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({
-      contents:[{parts:[{text:prompt}]}],
-      generationConfig:{maxOutputTokens:1800,temperature:0.7}
-    })
-  });
-  if(!resp.ok){
-    const err=await resp.json().catch(()=>({}));
-    throw new Error(err.error?.message||`API error ${resp.status}`);
-  }
-  const data=await resp.json();
-  return data.candidates[0].content.parts[0].text;
-}
-
-function parseJSON(raw){
-  let s=raw.replace(/```json\n?|\n?```|```/g,'').trim();
-  // Extract just the JSON object
-  const start=s.indexOf('{');
-  const end=s.lastIndexOf('}');
-  if(start!==-1&&end!==-1) s=s.slice(start,end+1);
-  try{
-    return JSON.parse(s);
-  }catch(e){
-    // Fix unescaped backslashes (LaTeX: \delta, \mu, \frac etc.)
-    s=s.replace(/\\(?!["\\/bfnrtu0-9])/g,'\\\\');
-    try{
-      return JSON.parse(s);
-    }catch(e2){
-      // Fix literal newlines inside JSON string values
-      s=s.replace(/("(?:[^"\\]|\\.)*")|(\n)/g,(m,str,nl)=>str?str:' ');
-      return JSON.parse(s);
-    }
-  }
-}
-
-window.generateWrittenQ=async function(){
-  if(state.aiGenerating)return;
-  if(!loadAIKey()){state.showKeyModal=true;render();return;}
-  const allMods=['CM1A','CM1B','CS1A','CS1B','CB1'];
-  // Build list of modules that have at least one ticked subtopic
-  const tickedMods=allMods.filter(m=>{
-    const modCodes=m==='CS1B'?['CS1A','CS1B']:[m];
-    return CARDS.some(c=>modCodes.includes(c.module)&&pool[c.sub]);
-  });
-  const candidateMods=tickedMods.length>0?tickedMods:allMods;
-  const mod=(state.module==='ALL'||state.module==='CS1B')?candidateMods[Math.floor(Math.random()*candidateMods.length)]:state.module;
-  const ctx=MODULE_CONTEXT[mod]||'Actuarial science';
-  const modObj=MODULES.find(m=>m.id===mod);
-  const color=modObj?modObj.color:'#3D6FD1';
-  state.aiGenerating=true;state.aiGenError='';render();
-  try{
-    const raw=await callGemini(
-      `You are an IFoA actuarial exam question writer for the ${mod} module.\n\nSyllabus content: ${ctx}\n\nGenerate one written practice question at IFoA past-paper standard. Requirements:\n- Structure the question with labelled parts: (i), (ii), (iii) etc., each with its own mark allocation in square brackets e.g. [2 marks]\n- Include a brief scenario/context at the top before the parts\n- Require written answers: definitions, derivations, explanations or short calculations\n- Use precise actuarial notation throughout\n- For ALL mathematical expressions use LaTeX with $ delimiters: inline math as $...$ and display equations as $$...$$\n- Examples: write $\\mu_i$ not mu_i, write $\\ln(\\mu_i) = \\beta_0 + \\beta_1 x_i$ not ln(mu), write $Y_i \\sim \\text{Poisson}(\\mu_i)$ not Y~Poisson\n\nReturn ONLY a valid JSON object (no markdown fences, no explanation outside the JSON):\n{"topic":"<short topic name>","marks":<total integer marks>,"stem":"<full past-paper style question with parts (i)(ii) etc and mark allocations>","model":"<model answer with clear part headings matching the question parts, full working, and LaTeX math using $ delimiters>"}`
-    );
-    const q=parseJSON(raw);
-    const aiQ={module:mod,sub:'ai',chip:color,code:mod,topic:q.topic||'AI Generated',marks:q.marks||5,stem:q.stem,model:q.model,ai:true};
-    if(!state.paDeck||state.paDeck.length===0) buildDecks();
-    state.paDeck.unshift(aiQ);
-    state.paIndex=0;state.paText='';state.paStatus='idle';state.paVerdict=null;state.paPreview=false;
-    // QW-7: start countdown for new AI question
-    state.paQStartTime=Date.now();state.paQDuration=Math.round(aiQ.marks*1.8)*60;
-  }catch(e){
-    if(e.message==='NO_KEY') state.showKeyModal=true;
-    else state.aiGenError=e.message||'Generation failed';
-  }
-  state.aiGenerating=false;render();
-};
-
-window.generateRQ=async function(){
-  if(state.aiGenerating)return;
-  if(!loadAIKey()){state.showKeyModal=true;render();return;}
-  const topic=R_TOPICS[Math.floor(Math.random()*R_TOPICS.length)];
-  state.aiGenerating=true;state.aiGenError='';render();
-  try{
-    const raw=await callGemini(
-      `You are an IFoA CS1 exam question writer.\n\nGenerate one R coding practice question on: "${topic}".\n\nRequirements:\n- Small realistic actuarial dataset (6-12 rows, 2-4 columns)\n- Solvable in R in 5-10 minutes\n- The setup R code must create all required variables\n- Starter code should have the structure with comments but leave key lines blank\n- Model answer should be complete, runnable R code\n\nReturn ONLY a valid JSON object (no markdown, no code fences, no explanation):\n{"topic":"<short topic>","marks":<4-6>,"prompt":"<clear question with any context>","setup":"<complete R code creating dataset variables>","starter":"<skeleton R code with comments showing structure>","hint":"<one concise hint>","model":"<complete working R solution>"}`
-    );
-    const q=parseJSON(raw);
-    const preview=extractPreview(q.setup);
-    state.aiRQuestions.unshift({sub:'ai',topic:q.topic||topic,marks:q.marks||5,prompt:q.prompt,setup:q.setup,starter:q.starter,hint:q.hint,model:q.model,preview,ai:true});
-    state.rIndex=0;state.rCode=null;state.rOutput=[];state.rImages=[];state.rRan=false;state.showHint=false;state.showModel=false;
-  }catch(e){
-    if(e.message==='NO_KEY') state.showKeyModal=true;
-    else state.aiGenError=e.message||'Generation failed';
-  }
-  state.aiGenerating=false;render();
-};
-
-function extractPreview(setup){
-  if(!setup) return {cols:['data'],rows:[['(run setup to see)']]};
-  // Try to extract variable names from assignment lines
-  const vars=(setup.match(/^(\w+)\s*<-/gm)||[]).map(m=>m.replace(/\s*<-.*/,'')).filter(Boolean);
-  if(!vars.length) return {cols:['setup'],rows:[['(run to see data)']]};
-  return {cols:vars.slice(0,4),rows:[['R setup creates: '+vars.join(', ')]]};
-}
-
-window.openKeyModal=function(){state.showKeyModal=true;render();};
-window.closeKeyModal=function(){state.showKeyModal=false;render();};
-window.submitKeyModal=function(){
-  const inp=document.getElementById('ai-key-input');
-  if(inp&&inp.value.trim()) saveAIKey(inp.value.trim());
-  state.showKeyModal=false;render();
-};
-
-function renderAIKeyModal(){
-  const hasKey=!!loadAIKey();
-  return `<div class="modal-overlay" onclick="closeKeyModal()">
-    <div class="modal-box" onclick="event.stopPropagation()" style="width:420px">
-      <div class="modal-title">Google Gemini API Key <span style="font-size:12px;font-weight:500;color:#2E9C8E;background:var(--tint-teal);padding:2px 8px;border-radius:4px;margin-left:4px">Free</span></div>
-      <div class="text-sm text-secondary mb-8">Get a free key at <strong>aistudio.google.com</strong> → "Get API key". No credit card required.</div>
-      <div class="text-sm text-secondary mb-16">Your key is saved only in your browser's local storage.</div>
-      <div class="mb-20">
-        <label class="form-label">API Key ${hasKey?'<span style="color:#2E9C8E">(saved)</span>':''}</label>
-        <input id="ai-key-input" type="password" value="${escHtml(loadAIKey())}" placeholder="AIzaSy…" style="font-family:'JetBrains Mono',monospace;font-size:12.5px;border:1px solid var(--border);border-radius:8px;padding:9px 12px;width:100%;outline:none;color:var(--t1);background:#FAFBFC">
-      </div>
-      <div class="flex gap-8">
-        <button class="btn btn-ghost" style="flex:1" onclick="closeKeyModal()">Cancel</button>
-        <button class="btn btn-primary" style="flex:1" onclick="submitKeyModal()">Save &amp; close</button>
-      </div>
-    </div>
-  </div>`;
-}
-
-// ========================
 // EXPORT / IMPORT
 // ========================
 window.exportData = function() {
@@ -2526,9 +1638,7 @@ window.drillSubTopic = function(subId) {
   for (const course of SYLLABUS) {
     for (const topic of course.topics) {
       if (topic.subs.some(s => s.id === subId)) {
-        const cm1TopicIdx = course.code === 'CM1' ? course.topics.indexOf(topic) : -1;
-        if (course.code === 'CM1') modId = cm1TopicIdx < 2 ? 'CM1A' : 'CM1B';
-        else modId = course.code;
+        modId = examOf(course.code);
         break;
       }
     }
@@ -2549,13 +1659,13 @@ window.drillSubTopic = function(subId) {
 window.autoSuggestPlan = function() {
   // Rank modules by mastery (ascending — lowest first)
   const modMastery = MODULES.map(m => ({
-    modId: m.id, label: m.label, color: m.color,
+    modId: m.id, name: m.name, color: m.color,
     pct: moduleCardMastery(m.id)
   })).sort((a,b) => a.pct - b.pct);
 
   const plan = loadPlanForWeek(state.planWeekOffset || 0);
   const days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-  // Assign sessions: rotate through weakest 3 modules, skip Sunday
+  // Assign flashcard sessions: rotate through weakest 3 modules, skip Sunday
   const priorities = modMastery.slice(0, 3);
   let qi = 0;
   plan.forEach((day, i) => {
@@ -2563,12 +1673,11 @@ window.autoSuggestPlan = function() {
     if (day.chips && day.chips.length > 0) return; // don't overwrite existing chips
     const mod = priorities[qi % priorities.length];
     qi++;
-    const type = (qi % 2 === 0) ? 'practice' : 'flashcards';
     day.chips = [{
-      label: `${mod.label.split(' ')[0]} · ${type === 'flashcards' ? 'Flashcards' : 'Written'}`,
+      label: `${mod.modId} · Flashcards`,
       color: mod.color,
       modId: mod.modId,
-      type
+      type: 'flashcards'
     }];
   });
   savePlanForWeek(plan, state.planWeekOffset || 0);
@@ -2612,54 +1721,6 @@ function renderOverdueAlerts() {
 }
 
 // ========================
-// EXAM TIMER MODE
-// ========================
-const EXAM_TOTAL_MINS = {CM1A:200,CM1B:200,CS1A:105,CS1B:105,CB1:180,ALL:600};
-let examTimerInterval = null;
-
-window.toggleExamMode = function() {
-  state.examMode = !state.examMode;
-  if (state.examMode) {
-    const mins = EXAM_TOTAL_MINS[state.module] || 180;
-    state.examModeEnd = Date.now() + mins * 60 * 1000;
-    examTimerInterval = setInterval(() => {
-      if (!state.examMode) { clearInterval(examTimerInterval); return; }
-      const left = Math.max(0, Math.round((state.examModeEnd - Date.now()) / 1000));
-      const el = document.getElementById('exam-timer-display');
-      if (el) {
-        el.textContent = fmtExamTime(left);
-        el.className = 'exam-timer ' + (left < 300 ? 'danger' : left < 900 ? 'warn' : 'ok');
-      }
-      if (left === 0) { clearInterval(examTimerInterval); }
-    }, 1000);
-  } else {
-    clearInterval(examTimerInterval);
-    state.examModeEnd = null;
-  }
-  render();
-};
-
-function fmtExamTime(secs) {
-  const h = Math.floor(secs / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  const s = secs % 60;
-  if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
-  return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
-}
-
-function renderExamTimer() {
-  if (!state.examMode || !state.examModeEnd) return '';
-  const left = Math.max(0, Math.round((state.examModeEnd - Date.now()) / 1000));
-  const cls = left < 300 ? 'danger' : left < 900 ? 'warn' : 'ok';
-  return `<div style="display:flex;align-items:center;gap:10px;background:#1B2330;border-radius:10px;padding:10px 16px;margin-bottom:16px">
-    <span style="font-size:13px;font-weight:600;color:var(--t2)">🕐 Exam mode</span>
-    <span id="exam-timer-display" class="exam-timer ${cls}">${fmtExamTime(left)}</span>
-    <span style="flex:1;font-size:12px;color:#585B70">remaining — ${EXAM_TOTAL_MINS[state.module]||180} min total</span>
-    <button onclick="toggleExamMode()" style="font-size:12px;color:var(--t2);background:transparent;border:1px solid #313244;border-radius:6px;padding:4px 10px;cursor:pointer;font-family:inherit">End</button>
-  </div>`;
-}
-
-// ========================
 // PLANNER WEEK NAVIGATION
 // ========================
 function weekKey(offset) {
@@ -2696,10 +1757,10 @@ function loadPlanForWeek(offset) {
   const days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
   const defaultChips = [
     [{label:'CB1 · Flashcards',color:'#6B5DD3',modId:'CB1',type:'flashcards'}],
-    [{label:'CM1A · Flashcards',color:'#3D6FD1',modId:'CM1A',type:'flashcards'},{label:'CS1A · Written',color:'#2E9C8E',modId:'CS1A',type:'practice'}],
-    [{label:'CS1A · Written',color:'#2E9C8E',modId:'CS1A',type:'practice'}],
-    [{label:'CM1B · Written',color:'#3D6FD1',modId:'CM1B',type:'practice'}],
-    [{label:'CM1A · Flashcards',color:'#3D6FD1',modId:'CM1A',type:'flashcards'},{label:'CS1A · Written',color:'#2E9C8E',modId:'CS1A',type:'practice'},{label:'CB1 · Written',color:'#6B5DD3',modId:'CB1',type:'practice'}],
+    [{label:'CM1 · Flashcards',color:'#3D6FD1',modId:'CM1',type:'flashcards'},{label:'CS1 · Flashcards',color:'#2E9C8E',modId:'CS1',type:'flashcards'}],
+    [{label:'CS1 · Flashcards',color:'#2E9C8E',modId:'CS1',type:'flashcards'}],
+    [{label:'CM1 · Flashcards',color:'#3D6FD1',modId:'CM1',type:'flashcards'}],
+    [{label:'CM1 · Flashcards',color:'#3D6FD1',modId:'CM1',type:'flashcards'},{label:'CB1 · Flashcards',color:'#6B5DD3',modId:'CB1',type:'flashcards'}],
     [{label:'Review',color:'#7B8595',modId:null,type:null}],
     [],
   ];
