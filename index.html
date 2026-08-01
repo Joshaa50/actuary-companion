@@ -10,6 +10,8 @@
 <meta name="apple-mobile-web-app-title" content="Tabula">
 <meta name="theme-color" content="#3D6FD1">
 <link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Lexend:wght@400;500;600&display=swap" rel="stylesheet">
@@ -20,6 +22,8 @@ MathJax={tex:{inlineMath:[['$','$'],['\\(','\\)']],displayMath:[['$$','$$'],['\\
 <script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
 </head>
 <body>
+<a href="#main-content" class="skip-link">Skip to content</a>
+<div id="a11y-live" aria-live="polite" class="sr-only"></div>
 <div id="app"></div>
 
 <!-- Data files — edit these to update syllabus, cards and questions -->
@@ -28,7 +32,7 @@ MathJax={tex:{inlineMath:[['$','$'],['\\(','\\)']],displayMath:[['$$','$$'],['\\
 <script src="js/data/cards.js"></script>
 
 <!-- Main application logic -->
-<script src="js/app.js?v=8"></script>
+<script src="js/app.js?v=13"></script>
 <script>if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js');}</script>
 </body>
 </html>

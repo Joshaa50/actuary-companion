@@ -1,18 +1,27 @@
 // Tabula service worker — network-first everywhere so updates deploy immediately;
 // cache is the offline fallback
-const CACHE = 'tabula-v2';
+const CACHE = 'tabula-v3';
+// Relative paths so precache works both at localhost root and the GitHub Pages
+// subpath (/actuary-companion/) — absolute "/…" paths 404 on the subpath
 const SHELL = [
-  '/',
-  '/index.html',
-  '/css/styles.css',
-  '/js/app.js',
-  '/js/data/modules.js',
-  '/js/data/syllabus.js',
-  '/js/data/cards.js',
+  './',
+  './index.html',
+  './css/styles.css',
+  './js/app.js',
+  './js/data/modules.js',
+  './js/data/syllabus.js',
+  './js/data/cards.js',
+  './manifest.json',
+  './icons/icon-192.png',
+  './icons/icon-512.png',
+  './icons/apple-touch-icon.png',
 ];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)));
+  // allSettled so one missing asset never aborts the whole precache
+  e.waitUntil(
+    caches.open(CACHE).then(c => Promise.allSettled(SHELL.map(u => c.add(u))))
+  );
   self.skipWaiting();
 });
 

@@ -353,18 +353,30 @@ function renderKeepScroll(){
 function render(){
   const app=document.getElementById('app');
   if(!app)return;
-  app.innerHTML=`
+  try{
+    app.innerHTML=`
     ${renderSidebar()}
     <div class="main">
       ${renderTopbar()}
-      <div class="page-content">
+      <main class="page-content" id="main-content" role="main" tabindex="-1">
         ${renderView()}
-      </div>
+      </main>
     </div>
     ${renderMobileNav()}
     ${state.addingTo!==null?renderAddModal():''}
     ${state.showKeyModal?renderAIKeyModal():''}
   `;
+  }catch(err){
+    // Never white-screen: show a recoverable fallback instead of a blank app
+    console.error('Render failed:',err);
+    app.innerHTML=`<div style="max-width:420px;margin:60px auto;padding:24px;text-align:center;font-family:'Lexend',sans-serif">
+      <div style="font-size:34px;margin-bottom:12px">😵‍💫</div>
+      <div style="font-size:17px;font-weight:700;margin-bottom:8px">Something went wrong on this screen</div>
+      <div style="font-size:14px;color:#616B7A;line-height:1.6;margin-bottom:20px">Your progress is saved. Try going back to the dashboard or reloading.</div>
+      <button class="btn btn-primary" onclick="try{state.view='home';render()}catch(e){location.reload()}">Back to dashboard</button>
+    </div>`;
+    return;
+  }
   // Restore textarea values (practice)
   if(state.view==='practice'&&state.paStatus!=='complete'){
     const ta=document.getElementById('pa-answer');
@@ -439,14 +451,14 @@ const NAV_VIEWS=[
 function renderMobileNav(){
   const now=new Date();now.setHours(0,0,0,0);
   const badge=CARDS.filter(c=>pool[c.sub]).filter(c=>{const m=mastery[c.sub];return !m?.nextReview||new Date(m.nextReview)<=now;}).length;
-  return `<nav class="mobile-nav">
-    ${NAV_VIEWS.map(v=>`<div class="mobile-nav-item${state.view===v.id?' active':''}" onclick="go('${v.id}')">
+  return `<nav class="mobile-nav" aria-label="Main navigation">
+    ${NAV_VIEWS.map(v=>{const lbl=v.id==='home'?'Home':v.id==='flashcards'?'Cards':v.label;return `<div class="mobile-nav-item${state.view===v.id?' active':''}" role="button" tabindex="0" aria-label="${lbl}${v.id==='flashcards'&&badge>0?', '+badge+' due':''}"${state.view===v.id?' aria-current="page"':''} onclick="go('${v.id}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();go('${v.id}')}">
       <div style="position:relative;display:flex;align-items:center;justify-content:center">
         ${v.icon}
-        ${v.id==='flashcards'&&badge>0?`<span class="mobile-nav-badge">${badge}</span>`:''}
+        ${v.id==='flashcards'&&badge>0?`<span class="mobile-nav-badge" aria-hidden="true">${badge}</span>`:''}
       </div>
-      <span>${v.id==='home'?'Home':v.id==='flashcards'?'Cards':v.label}</span>
-    </div>`).join('')}
+      <span>${lbl}</span>
+    </div>`;}).join('')}
   </nav>`;
 }
 
@@ -468,12 +480,12 @@ function renderSidebar(){
     <div class="sidebar-bottom">
       <div class="exam-card mb-12">
         <div class="exam-card-label">Exam countdown</div>
-        <div class="exam-card-days">${d} <span style="font-size:14px;font-weight:500;color:#8A93A2">days</span></div>
+        <div class="exam-card-days">${d} <span style="font-size:14px;font-weight:500;color:#616B7A">days</span></div>
         <div class="exam-card-sub">${formatExamDate(state.examDate)}</div>
       </div>
       <div style="display:flex;gap:6px">
-        <button onclick="exportData()" style="flex:1;padding:7px 6px;border-radius:8px;border:1px solid #E8EBF0;background:#fff;font-size:11.5px;font-weight:600;color:#8A93A2;cursor:pointer;font-family:inherit;display:flex;align-items:center;justify-content:center;gap:4px;transition:all .15s" onmouseover="this.style.background='#F5F6F8';this.style.color='#1B2330'" onmouseout="this.style.background='#fff';this.style.color='#8A93A2'" title="Download a backup of all your progress">⬇ Backup</button>
-        <button onclick="triggerImport()" style="flex:1;padding:7px 6px;border-radius:8px;border:1px solid #E8EBF0;background:#fff;font-size:11.5px;font-weight:600;color:#8A93A2;cursor:pointer;font-family:inherit;display:flex;align-items:center;justify-content:center;gap:4px;transition:all .15s" onmouseover="this.style.background='#F5F6F8';this.style.color='#1B2330'" onmouseout="this.style.background='#fff';this.style.color='#8A93A2'" title="Restore progress from a backup file">⬆ Restore</button>
+        <button onclick="exportData()" style="flex:1;padding:7px 6px;border-radius:8px;border:1px solid #E8EBF0;background:#fff;font-size:11.5px;font-weight:600;color:#616B7A;cursor:pointer;font-family:inherit;display:flex;align-items:center;justify-content:center;gap:4px;transition:all .15s" onmouseover="this.style.background='#F5F6F8';this.style.color='#1B2330'" onmouseout="this.style.background='#fff';this.style.color='#616B7A'" title="Download a backup of all your progress">⬇ Backup</button>
+        <button onclick="triggerImport()" style="flex:1;padding:7px 6px;border-radius:8px;border:1px solid #E8EBF0;background:#fff;font-size:11.5px;font-weight:600;color:#616B7A;cursor:pointer;font-family:inherit;display:flex;align-items:center;justify-content:center;gap:4px;transition:all .15s" onmouseover="this.style.background='#F5F6F8';this.style.color='#1B2330'" onmouseout="this.style.background='#fff';this.style.color='#616B7A'" title="Restore progress from a backup file">⬆ Restore</button>
       </div>
     </div>
   </div>`;
@@ -505,7 +517,7 @@ function renderModulePills(){
   return `<div style="display:flex;gap:6px;flex-wrap:wrap">
     ${pills.map(p=>{
       const mod=MODULES.find(m=>m.id===p);
-      const color=mod?mod.color:'#8A93A2';
+      const color=mod?mod.color:'#616B7A';
       const label=p==='ALL'?'All':p;
       const active=state.module===p;
       return `<div class="pill${active?' pill-active':''}" style="color:${color};background:${active?color+'18':'transparent'}" onclick="setModule('${p}')">${label}</div>`;
@@ -541,7 +553,7 @@ function renderHome(){
 
   return `
   ${renderOverdueAlerts()}
-  <div class="grid-4 mb-16" style="grid-template-columns:repeat(4,1fr)">
+  <div class="grid-4 mb-16">
     ${statCard(dueCount,'Cards in pool','Across all modules')}
     ${statCard(overallMastPct+'%','Overall mastery','Based on card ratings')}
     ${statCard(studyStats.streak,'Day streak','Keep it up!')}
@@ -583,7 +595,7 @@ function renderHome(){
         const due=moduleCardsDue(m.id);
         const fill=due>0?Math.round(mast/100*circ*10)/10:0;
         const ringColor=due>0?m.color:'#D0D5DE';
-        const nameColor=due>0?'#1B2330':'#8A93A2';
+        const nameColor=due>0?'#1B2330':'#616B7A';
         return `<div class="flex items-center gap-8 mb-12" style="cursor:pointer" onclick="go('progress')">
           <svg width="32" height="32" viewBox="0 0 60 60">
             <circle cx="30" cy="30" r="26" class="ring-bg"/>
@@ -591,7 +603,7 @@ function renderHome(){
           </svg>
           <div style="flex:1">
             <div style="font-size:13px;font-weight:600;color:${nameColor}">${m.name}</div>
-            <div style="font-size:11.5px;color:#8A93A2">${due>0?mast+'% mastery · '+due+' in pool':'not in pool'}</div>
+            <div style="font-size:11.5px;color:#616B7A">${due>0?mast+'% mastery · '+due+' in pool':'not in pool'}</div>
           </div>
           ${due>0?`<span class="due-badge">${due}</span>`:''}
         </div>`;
@@ -678,9 +690,9 @@ function renderPlanner(){
       <div>
         <label class="form-label">Daily goal (cards)</label>
         <div class="flex items-center gap-8">
-          <button class="btn btn-ghost btn-sm" onclick="adjustGoal(-5)">−</button>
-          <span style="font-size:14px;font-weight:600;min-width:36px;text-align:center">${state.dailyGoal}</span>
-          <button class="btn btn-ghost btn-sm" onclick="adjustGoal(5)">+</button>
+          <button class="btn btn-ghost btn-sm" onclick="adjustGoal(-5)" aria-label="Decrease daily goal by 5">−</button>
+          <span style="font-size:14px;font-weight:600;min-width:36px;text-align:center" aria-live="polite">${state.dailyGoal}</span>
+          <button class="btn btn-ghost btn-sm" onclick="adjustGoal(5)" aria-label="Increase daily goal by 5">+</button>
         </div>
       </div>
     </div>
@@ -693,12 +705,12 @@ function renderPlanner(){
   </div>
 
   <div class="flex items-center justify-between mb-16">
-    <button class="week-nav-btn" onclick="shiftWeek(-1)" title="Previous week">←</button>
+    <button class="week-nav-btn" onclick="shiftWeek(-1)" title="Previous week" aria-label="Previous week">←</button>
     <div style="text-align:center">
       <div style="font-size:14px;font-weight:700">${weekLabel}</div>
       ${!isCurrentWeek?`<button class="btn btn-ghost btn-sm" style="margin-top:4px;font-size:11.5px" onclick="shiftWeek(${-offset})">↩ Back to this week</button>`:`<div class="text-xs text-secondary" style="margin-top:2px">Current week</div>`}
     </div>
-    <button class="week-nav-btn" onclick="shiftWeek(1)" title="Next week">→</button>
+    <button class="week-nav-btn" onclick="shiftWeek(1)" title="Next week" aria-label="Next week">→</button>
   </div>
 
   <div class="planner-grid">
@@ -707,7 +719,7 @@ function renderPlanner(){
         <div>
           <div class="plan-day-head">${day.day}</div>
           <div class="plan-day-date">${day.date}</div>
-          ${day.monthYear?`<div style="font-size:10px;color:#B0B7C3">${day.monthYear}</div>`:''}
+          ${day.monthYear?`<div style="font-size:10px;color:#6B7280">${day.monthYear}</div>`:''}
         </div>
         ${day.chips.map((chip,ci)=>`
           <div class="plan-chip" style="background:${chip.color}">
@@ -788,9 +800,9 @@ function renderFlashcards(){
     <span style="font-size:16px">🔁</span>
     <div>
       <div style="font-size:13px;font-weight:600;color:#C97B30">Review round — cards you found difficult</div>
-      <div style="font-size:12px;color:#8A93A2">${cards.length} card${cards.length!==1?'s':''} to retry</div>
+      <div style="font-size:12px;color:#616B7A">${cards.length} card${cards.length!==1?'s':''} to retry</div>
     </div>
-  </div>`:`<div style="display:flex;align-items:center;gap:10px;padding:7px 14px;background:#F5F6F8;border-radius:8px;margin-bottom:14px;font-size:12.5px;color:#8A93A2">
+  </div>`:`<div style="display:flex;align-items:center;gap:10px;padding:7px 14px;background:#F5F6F8;border-radius:8px;margin-bottom:14px;font-size:12.5px;color:#616B7A">
     <span><strong style="color:#3D6FD1">${_fcDueToday}</strong> due today</span>
     <span style="color:#D0D5DE">·</span>
     <span><strong style="color:#1B2330">${_fcUpcoming}</strong> upcoming</span>
@@ -807,14 +819,14 @@ function renderFlashcards(){
     </div>
   </div>
 
-  <div class="fc-card mb-20" style="border-top:4px solid ${card.color}" onclick="flipCard()">
+  <div class="fc-card mb-20" style="border-top:4px solid ${card.color}" role="button" tabindex="0" aria-label="Flashcard — activate to ${state.fcFlipped?'hide':'reveal'} answer" onclick="flipCard()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();flipCard()}">
     <div style="margin-bottom:12px">
       <span class="badge" style="background:${card.color}18;color:${card.color}">${card.topic}</span>
     </div>
     ${!state.fcFlipped
       ?`<div class="fc-q">${renderMd(card.q,!card.ai,'lines')}</div><div class="fc-flip-hint">Click to reveal answer</div>`
-      :`<span style="font-size:13px;font-weight:600;color:#8A93A2;display:block;margin-bottom:10px">Answer</span>
-        <div class="fc-q mb-12" style="font-size:15px;color:#8A93A2">${renderMd(card.q,!card.ai,'lines')}</div>
+      :`<span style="font-size:13px;font-weight:600;color:#616B7A;display:block;margin-bottom:10px">Answer</span>
+        <div class="fc-q mb-12" style="font-size:15px;color:#616B7A">${renderMd(card.q,!card.ai,'lines')}</div>
         <div style="width:48px;height:3px;border-radius:2px;background:${card.color}55;margin:14px 0"></div>
         <div class="fc-a">${renderMd(card.a,!card.ai,'bullets')}</div>`
     }
@@ -827,9 +839,11 @@ function renderFlashcards(){
     <button class="rating-btn rating-good" onclick="rateCard('good')">Good</button>
     <button class="rating-btn rating-easy" onclick="rateCard('easy')">Easy</button>
   </div>
-  <div class="kb-hint"><span class="kb-key">1</span> Again &nbsp; <span class="kb-key">2</span> Hard &nbsp; <span class="kb-key">3</span> Good &nbsp; <span class="kb-key">4</span> Easy</div>`:`
+  <div class="kb-hint"><span class="kb-key">1</span> Again &nbsp; <span class="kb-key">2</span> Hard &nbsp; <span class="kb-key">3</span> Good &nbsp; <span class="kb-key">4</span> Easy</div>
+  <div class="swipe-hint">Swipe card&nbsp; → <b>Good</b> &nbsp;·&nbsp; ← <b>Again</b></div>`:`
   <div style="text-align:center" class="text-sm text-secondary">Rate yourself after flipping</div>
-  <div class="kb-hint"><span class="kb-key">Space</span> or <span class="kb-key">→</span> to flip</div>`}`;
+  <div class="kb-hint"><span class="kb-key">Space</span> or <span class="kb-key">→</span> to flip</div>
+  <div class="swipe-hint">Tap or swipe the card to flip</div>`}`;
 }
 
 function renderFCComplete(total){
@@ -894,10 +908,10 @@ function renderWrittenPractice(){
     <span style="font-size:16px">🔁</span>
     <div>
       <div style="font-size:13px;font-weight:600;color:#C97B30">Review round — questions you found difficult</div>
-      <div style="font-size:12px;color:#8A93A2">${qs.length} question${qs.length!==1?'s':''} to retry</div>
+      <div style="font-size:12px;color:#616B7A">${qs.length} question${qs.length!==1?'s':''} to retry</div>
     </div>
   </div>`:''}
-  <div class="flex items-center justify-between mb-20">
+  <div class="flex items-center justify-between mb-20 pa-meta">
     <div class="flex items-center gap-12">
       <div class="text-sm text-secondary">Question ${idx+1} of ${qs.length}</div>
       ${state.paStartTime?`<div class="text-sm text-secondary" id="pa-elapsed" style="font-variant-numeric:tabular-nums">⏱ ${fmtElapsed(Date.now()-state.paStartTime)}</div>`:''}
@@ -906,8 +920,8 @@ function renderWrittenPractice(){
     <div class="flex items-center gap-8">
       ${q.ai?`<span class="badge" style="background:#ECF1FB;color:#3D6FD1">✨ AI</span>`:''}
       <span class="badge" style="background:${q.chip}18;color:${q.chip}">${q.code}</span>
-      <span class="badge" style="background:#F5F6F8;color:#8A93A2">${q.marks} marks</span>
-      <span class="badge" style="background:#F5F6F8;color:#8A93A2" title="Suggested time at ~1.8 min/mark">${Math.round(q.marks*1.8)} min</span>
+      <span class="badge" style="background:#F5F6F8;color:#616B7A">${q.marks} marks</span>
+      <span class="badge" style="background:#F5F6F8;color:#616B7A" title="Suggested time at ~1.8 min/mark">${Math.round(q.marks*1.8)} min</span>
       <button class="btn btn-ghost btn-sm" onclick="resetPA()">Restart</button>
     </div>
   </div>
@@ -924,7 +938,7 @@ function renderWrittenPractice(){
       <button class="btn btn-ghost btn-sm" onclick="togglePAPreview()">${state.paPreview?'✏ Edit':'👁 Preview'}</button>
     </div>
     ${state.paPreview
-      ?`<div id="pa-preview" class="rd" style="padding:12px 14px;background:#F8F9FB;border-radius:8px;min-height:120px">${state.paText?renderMd(state.paText):'<span style="color:#8A93A2">Nothing to preview yet</span>'}</div>`
+      ?`<div id="pa-preview" class="rd" style="padding:12px 14px;background:#F8F9FB;border-radius:8px;min-height:120px">${state.paText?renderMd(state.paText):'<span style="color:#616B7A">Nothing to preview yet</span>'}</div>`
       :`<textarea id="pa-answer" rows="7" placeholder="Write your answer here… (use $…$ for inline LaTeX)" oninput="state.paText=this.value">${escHtml(state.paText)}</textarea>`
     }
     <div class="flex items-center justify-between" style="margin-top:12px">
@@ -936,7 +950,7 @@ function renderWrittenPractice(){
   ${state.paStatus==='submitted'?`
   <div class="card mb-16" id="pa-result">
     <div style="font-size:13px;font-weight:600;margin-bottom:10px">Your answer</div>
-    <div class="rd" style="padding:12px 14px;background:#F8F9FB;border-radius:8px;white-space:pre-wrap">${escHtml(state.paText)||'<span style="color:#8A93A2">No answer written</span>'}</div>
+    <div class="rd" style="padding:12px 14px;background:#F8F9FB;border-radius:8px;white-space:pre-wrap">${escHtml(state.paText)||'<span style="color:#616B7A">No answer written</span>'}</div>
   </div>
 
   <div class="card mb-16" style="border-left:3px solid #3D6FD1">
@@ -951,7 +965,7 @@ function renderWrittenPractice(){
     ${state.aiMarking?`
       <div style="display:flex;align-items:center;gap:10px;padding:14px;background:#F5F6F8;border-radius:8px">
         <div style="width:18px;height:18px;border:2.5px solid #3D6FD1;border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite;flex-shrink:0"></div>
-        <span style="font-size:13px;color:#8A93A2">Marking your answer…</span>
+        <span style="font-size:13px;color:#616B7A">Marking your answer…</span>
       </div>`:`
       <button class="btn btn-primary" onclick="aiMarkAnswer()">✨ Mark my answer</button>
       <div class="verdict-row" style="margin-top:12px">
@@ -971,7 +985,7 @@ function renderWrittenPractice(){
   ${state.paStatus==='graded'?`
   <div class="card mb-16">
     <div style="font-size:13px;font-weight:600;margin-bottom:10px">Your answer</div>
-    <div class="rd" style="padding:12px 14px;background:#F8F9FB;border-radius:8px;white-space:pre-wrap">${escHtml(state.paText)||'<span style="color:#8A93A2">No answer written</span>'}</div>
+    <div class="rd" style="padding:12px 14px;background:#F8F9FB;border-radius:8px;white-space:pre-wrap">${escHtml(state.paText)||'<span style="color:#616B7A">No answer written</span>'}</div>
   </div>
   <div class="card mb-16" style="border-left:3px solid #3D6FD1">
     <div style="font-size:13px;font-weight:600;color:#3D6FD1;margin-bottom:10px">Model answer</div>
@@ -994,7 +1008,7 @@ function renderWrittenPractice(){
 function verdictBadge(v){
   if(!v)return '';
   const map={incorrect:['#FDF2F2','#C94040','Incorrect'],partial:['#FDF7F0','#C97B30','Partial'],correct:['#F0FAF8','#2E9C8E','Correct']};
-  const [bg,color,label]=map[v]||['#F5F6F8','#8A93A2',v];
+  const [bg,color,label]=map[v]||['#F5F6F8','#616B7A',v];
   return `<span class="badge" style="background:${bg};color:${color}">${label}</span>`;
 }
 
@@ -1063,7 +1077,7 @@ function renderRPractice(){
     <div class="flex items-center gap-8">
       ${isAI?`<span class="badge" style="background:#ECF1FB;color:#3D6FD1">✨ AI</span>`:''}
       <span class="badge" style="background:#2E9C8E18;color:#2E9C8E">CS1B</span>
-      <span class="badge" style="background:#F5F6F8;color:#8A93A2">${rq.marks} marks</span>
+      <span class="badge" style="background:#F5F6F8;color:#616B7A">${rq.marks} marks</span>
       ${statusBadge}
     </div>
   </div>
@@ -1082,9 +1096,9 @@ function renderRPractice(){
       <div class="text-xs text-secondary mb-6" style="font-weight:600">Data preview</div>
       <div style="overflow-x:auto">
         <table style="font-family:'JetBrains Mono',monospace;font-size:12px;border-collapse:collapse">
-          <tr>${rq.preview.cols.map(c=>`<th style="padding:4px 10px;text-align:left;color:#8A93A2;font-weight:600;border-bottom:1px solid #E8EBF0">${escHtml(String(c))}</th>`).join('')}</tr>
+          <tr>${rq.preview.cols.map(c=>`<th style="padding:4px 10px;text-align:left;color:#616B7A;font-weight:600;border-bottom:1px solid #E8EBF0">${escHtml(String(c))}</th>`).join('')}</tr>
           ${rq.preview.rows.map(r=>`<tr>${r.map(v=>`<td style="padding:4px 10px;border-bottom:1px solid #F5F6F8">${escHtml(String(v))}</td>`).join('')}</tr>`).join('')}
-          <tr><td colspan="${rq.preview.cols.length}" style="padding:4px 10px;color:#8A93A2;font-size:11px">…</td></tr>
+          <tr><td colspan="${rq.preview.cols.length}" style="padding:4px 10px;color:#616B7A;font-size:11px">…</td></tr>
         </table>
       </div>
     </div>`}
@@ -1223,7 +1237,7 @@ function renderProgress(){
     </div>
     ${whEntries.map(e=>{
       const vmap={correct:['#F0FAF8','#2E9C8E','Correct'],partial:['#FDF7F0','#C97B30','Partial'],incorrect:['#FDF2F2','#C94040','Incorrect']};
-      const [bg,col,lbl]=vmap[e.verdict]||['#F5F6F8','#8A93A2',e.verdict];
+      const [bg,col,lbl]=vmap[e.verdict]||['#F5F6F8','#616B7A',e.verdict];
       const dt=new Date(e.timestamp).toLocaleDateString('en-GB',{day:'numeric',month:'short'});
       return `<div class="danger-row" style="gap:8px">
         <span class="badge" style="background:${bg};color:${col};flex-shrink:0">${lbl}</span>
@@ -1259,7 +1273,7 @@ function renderProgress(){
           <div style="font-size:20px;font-weight:700;color:${course.color}">${coursePoolPct(course)}%</div>
           <div class="text-xs text-secondary">covered</div>
         </div>
-        <span style="color:#8A93A2;font-size:14px;transition:transform .2s;display:inline-block;transform:rotate(${open?90:0}deg)">▶</span>
+        <span style="color:#616B7A;font-size:14px;transition:transform .2s;display:inline-block;transform:rotate(${open?90:0}deg)">▶</span>
       </div>
 
       ${open?`
@@ -1270,11 +1284,11 @@ function renderProgress(){
           return `
           <div>
             <div class="topic-row${state.expandedTopics[topic.id]?' expanded':''}" onclick="toggleTopic('${topic.id}')">
-              <span class="expand-caret" style="color:#8A93A2;font-size:12px">▶</span>
+              <span class="expand-caret" style="color:#616B7A;font-size:12px">▶</span>
               <input type="checkbox" ${pct===100?'checked':pct>0?'indeterminate-js':''} onclick="event.stopPropagation();toggleTopic_pool('${topic.id}',this.checked)" style="flex-shrink:0;width:16px;height:16px;cursor:pointer" id="tc-${topic.id}">
               <div style="flex:1">
-                <div style="font-size:13.5px;font-weight:600">${topic.name} <span style="color:#8A93A2;font-weight:400">[${topic.w}%]</span></div>
-                <div style="font-size:11.5px;color:#8A93A2;margin-top:2px">${pooled}/${topic.subs.length} subtopics covered</div>
+                <div style="font-size:13.5px;font-weight:600">${topic.name} <span style="color:#616B7A;font-weight:400">[${topic.w}%]</span></div>
+                <div style="font-size:11.5px;color:#616B7A;margin-top:2px">${pooled}/${topic.subs.length} subtopics covered</div>
               </div>
               <div class="mastery-bar" style="max-width:100px">
                 <div class="mastery-fill" style="width:${pct}%;background:${course.color}"></div>
@@ -1287,10 +1301,10 @@ function renderProgress(){
               <div class="sub-row">
                 <input type="checkbox" ${covered?'checked':''} onchange="togglePool('${sub.id}',this.checked)">
                 <div style="flex:1">
-                  <div style="font-size:12px;color:#8A93A2;font-weight:600;margin-bottom:1px">${sub.num}</div>
+                  <div style="font-size:12px;color:#616B7A;font-weight:600;margin-bottom:1px">${sub.num}</div>
                   <div style="font-size:13px">${sub.name}</div>
                 </div>
-                <span style="font-size:11px;color:${covered?'#2E9C8E':'#B0B7C3'};flex-shrink:0;font-weight:600">${covered?'✓ covered':'not yet'}</span>
+                <span style="font-size:11px;color:${covered?'#2E9C8E':'#6B7280'};flex-shrink:0;font-weight:600">${covered?'✓ covered':'not yet'}</span>
               </div>`;
             }).join(''):''}
           </div>`;
@@ -1358,10 +1372,17 @@ window.setModule=function(mod){
   render();
 };
 
+// Announce dynamic changes to screen readers via the polite live region
+function announce(msg){
+  const el=document.getElementById('a11y-live');
+  if(el){el.textContent='';setTimeout(()=>{el.textContent=msg;},30);}
+}
+
 window.flipCard=function(){
   if(state.fcIndex>=filteredCards().length)return;
   state.fcFlipped=!state.fcFlipped;
   render();
+  announce(state.fcFlipped?'Answer revealed':'Question shown');
 };
 
 window.rateCard=function(rating){
@@ -1382,6 +1403,8 @@ window.rateCard=function(rating){
     state.fcIndex=0;
   }
   render();
+  const remaining=Math.max(0,(state.fcDeck?state.fcDeck.length:0)-state.fcIndex);
+  announce(`Rated ${rating}. ${remaining} card${remaining===1?'':'s'} left.`);
 };
 
 window.resetFC=function(){
@@ -1664,7 +1687,7 @@ window.confirmAdd=function(dayIndex){
   const plan=state.planData;
   if(!plan||dayIndex===null)return;
   const mod=MODULES.find(m=>m.id===state.addMod);
-  const color=mod?mod.color:'#8A93A2';
+  const color=mod?mod.color:'#616B7A';
   const typeMap={'Flashcards':'flashcards','Written':'practice','Review':null};
   plan[dayIndex].chips.push({
     label:`${state.addMod} · ${state.addType}`,
@@ -2129,8 +2152,8 @@ function renderDangerZone() {
         <span class="badge" style="background:${s.color}18;color:${s.color};font-size:10px;flex-shrink:0;white-space:nowrap">${s.course} ${s.num}</span>
         <div style="flex:1;font-size:12.5px;line-height:1.3;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">${escHtml(s.name)}</div>
         <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
-          <span style="font-size:13px;font-weight:700;color:${s.pct < 0 ? '#B0B7C3' : s.pct < 40 ? '#C94040' : '#C97B30'}">${s.pct < 0 ? 'Unseen' : s.pct + '%'}</span>
-          <span style="font-size:11px;color:#8A93A2">▶</span>
+          <span style="font-size:13px;font-weight:700;color:${s.pct < 0 ? '#6B7280' : s.pct < 40 ? '#C94040' : '#C97B30'}">${s.pct < 0 ? 'Unseen' : s.pct + '%'}</span>
+          <span style="font-size:11px;color:#616B7A">▶</span>
         </div>
       </div>`).join('')}
   </div>`;
@@ -2263,10 +2286,10 @@ function renderExamTimer() {
   const left = Math.max(0, Math.round((state.examModeEnd - Date.now()) / 1000));
   const cls = left < 300 ? 'danger' : left < 900 ? 'warn' : 'ok';
   return `<div style="display:flex;align-items:center;gap:10px;background:#1B2330;border-radius:10px;padding:10px 16px;margin-bottom:16px">
-    <span style="font-size:13px;font-weight:600;color:#8A93A2">🕐 Exam mode</span>
+    <span style="font-size:13px;font-weight:600;color:#616B7A">🕐 Exam mode</span>
     <span id="exam-timer-display" class="exam-timer ${cls}">${fmtExamTime(left)}</span>
     <span style="flex:1;font-size:12px;color:#585B70">remaining — ${EXAM_TOTAL_MINS[state.module]||180} min total</span>
-    <button onclick="toggleExamMode()" style="font-size:12px;color:#8A93A2;background:transparent;border:1px solid #313244;border-radius:6px;padding:4px 10px;cursor:pointer;font-family:inherit">End</button>
+    <button onclick="toggleExamMode()" style="font-size:12px;color:#616B7A;background:transparent;border:1px solid #313244;border-radius:6px;padding:4px 10px;cursor:pointer;font-family:inherit">End</button>
   </div>`;
 }
 
@@ -2350,5 +2373,53 @@ document.addEventListener('keydown', function(e) {
     }
   }
 });
+
+// Touch swipe gestures on flashcards (event-delegated so they survive re-renders).
+// The card follows the finger and, once flipped, tints green (Good) / red (Again)
+// past the commit threshold. Unflipped → any swipe flips.
+(function setupCardGestures(){
+  const THRESH=55;
+  let start=null, el=null, dragging=false;
+  const reset=animate=>{
+    if(el){
+      if(animate)el.style.transition='transform .2s ease';
+      el.style.transform='';
+      const b=el.querySelector('.swipe-badge'); if(b)b.remove();
+      const cur=el; setTimeout(()=>{if(cur)cur.style.transition='';},210);
+    }
+    start=null; el=null; dragging=false;
+  };
+  document.addEventListener('touchstart',e=>{
+    const card=e.target.closest?e.target.closest('.fc-card'):null;
+    if(!card){start=null;el=null;return;}
+    const t=e.touches[0]; start={x:t.clientX,y:t.clientY}; el=card; dragging=false;
+  },{passive:true});
+  document.addEventListener('touchmove',e=>{
+    if(!start||!el||state.view!=='flashcards')return;
+    const t=e.touches[0], dx=t.clientX-start.x, dy=t.clientY-start.y;
+    if(!dragging && (Math.abs(dx)<8 || Math.abs(dx)<Math.abs(dy)))return; // allow vertical scroll
+    dragging=true;
+    el.style.transition='';
+    el.style.transform=`translateX(${dx}px) rotate(${dx*0.03}deg)`;
+    if(state.fcFlipped){
+      let badge=el.querySelector('.swipe-badge');
+      if(Math.abs(dx)>THRESH){
+        const good=dx>0;
+        if(!badge){badge=document.createElement('div');badge.className='swipe-badge';el.appendChild(badge);}
+        badge.textContent=good?'✓ GOOD':'↻ AGAIN';
+        badge.style.cssText=`position:absolute;top:14px;${good?'right':'left'}:14px;background:${good?'#2E9C8E':'#C94040'};color:#fff;font-weight:700;font-size:13px;padding:5px 12px;border-radius:8px;font-family:'Lexend',sans-serif;letter-spacing:.03em`;
+      }else if(badge){badge.remove();}
+    }
+  },{passive:true});
+  document.addEventListener('touchend',e=>{
+    if(!start){reset(false);return;}
+    const t=e.changedTouches[0], dx=t.clientX-start.x, dy=t.clientY-start.y;
+    const horizontal=Math.abs(dx)>=THRESH && Math.abs(dx)>=Math.abs(dy)*1.3;
+    const wasFlipped=state.fcFlipped, view=state.view;
+    reset(!horizontal); // snap back only when not committing
+    if(!horizontal||view!=='flashcards')return;
+    if(!wasFlipped) flipCard(); else rateCard(dx>0?'good':'again');
+  },{passive:true});
+})();
 
 render();
