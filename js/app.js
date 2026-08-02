@@ -67,10 +67,8 @@ function loadPool(){
     const s=localStorage.getItem('tabula_pool_v1');
     if(s)return JSON.parse(s);
   }catch(e){}
-  // Default: all checked
-  const p={};
-  SYLLABUS.forEach(c=>c.topics.forEach(t=>t.subs.forEach(s=>{ p[s.id]=true; })));
-  return p;
+  // Default: nothing checked — a fresh user ticks the sections they've covered
+  return {};
 }
 let pool=loadPool();
 function savePool(){localStorage.setItem('tabula_pool_v1',JSON.stringify(pool));}
@@ -1017,6 +1015,25 @@ function coursePoolPct(course){
   return Math.round(allSubs.filter(s=>pool[s.id]).length/allSubs.length*100);
 }
 
+// Fold the syllabus papers (CS1A, CS1B, …) into their whole exam (CS1) so the
+// Progress page shows one card per exam. Each group keeps its constituent
+// `papers` (for a paper sub-heading) plus a flattened `topics` list so the
+// existing coverage/mastery helpers work unchanged.
+function examGroups(){
+  const order=[], byId={};
+  SYLLABUS.forEach(course=>{
+    const code=examOf(course.code);
+    if(!byId[code]){
+      const mod=MODULES.find(m=>m.id===code);
+      byId[code]={code, name:(mod&&mod.name)||course.name, color:(mod&&mod.color)||course.color, papers:[], topics:[]};
+      order.push(code);
+    }
+    byId[code].papers.push(course);
+    byId[code].topics.push(...course.topics);
+  });
+  return order.map(code=>byId[code]);
+}
+
 function renderProgress(){
   const allSubs=[];
   SYLLABUS.forEach(c=>c.topics.forEach(t=>t.subs.forEach(s=>allSubs.push(s.id))));
@@ -1034,16 +1051,16 @@ function renderProgress(){
   ${renderTrends()}
   ${renderMilestones()}
 
-  ${SYLLABUS.map(course=>{
-    const coursePct=avgMastery(course);
+  ${examGroups().map(course=>{
     const open=state.expandedCourses[course.code]!==false;
+    const subCount=course.topics.reduce((a,t)=>a+t.subs.length,0);
     return `
     <div class="card mb-16">
       <div class="flex items-center gap-12 mb-4" style="cursor:pointer;user-select:none" onclick="toggleCourse('${course.code}')">
         <div style="width:4px;height:36px;border-radius:2px;background:${course.color};flex-shrink:0"></div>
         <div style="flex:1">
           <div style="font-size:16px;font-weight:700">${course.code} — ${course.name}</div>
-          <div class="text-sm text-secondary">${course.topics.length} topics · ${course.topics.reduce((a,t)=>a+t.subs.length,0)} subtopics</div>
+          <div class="text-sm text-secondary">${course.topics.length} topics · ${subCount} subtopics</div>
         </div>
         <div style="text-align:right;margin-right:8px">
           <div style="font-size:20px;font-weight:700;color:${course.color}">${coursePoolPct(course)}%</div>
@@ -1054,7 +1071,9 @@ function renderProgress(){
 
       ${open?`
       <div style="margin-top:12px">
-        ${course.topics.map(topic=>{
+        ${course.papers.map((paper,pi)=>`
+        ${course.papers.length>1?`<div style="font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--t2);margin:${pi?18:2}px 0 8px;padding-bottom:6px;border-bottom:1px solid var(--border)">${paper.code} · ${paper.name}</div>`:''}
+        ${paper.topics.map(topic=>{
           const pct=topicPoolPct(topic);
           const pooled=topic.subs.filter(s=>pool[s.id]).length;
           return `
@@ -1084,7 +1103,7 @@ function renderProgress(){
               </div>`;
             }).join(''):''}
           </div>`;
-        }).join('')}
+        }).join('')}`).join('')}
       </div>`:''}
     </div>`;
   }).join('')}`;
@@ -1575,7 +1594,7 @@ function renderDangerZone() {
         if (!m || m.seen < 1) return;            // only judge what's been studied
         const pct = Math.round(m.good / m.seen * 100);
         if (pct >= WEAK_PCT) return;             // strong enough → not a weak area
-        rows.push({id: sub.id, name: sub.name, num: sub.num, course: course.code, color: course.color, pct, seen: m.seen});
+        rows.push({id: sub.id, name: sub.name, num: sub.num, course: examOf(course.code), color: course.color, pct, seen: m.seen});
       });
     });
   });
@@ -1668,7 +1687,7 @@ function renderOverdueAlerts() {
         const m = mastery[sub.id];
         if (!m || !m.lastSeen) return; // never studied → not overdue
         const days = Math.floor((now - new Date(m.lastSeen).getTime()) / 86400000);
-        if (days >= 14) overdue.push({name: sub.name, course: course.code, color: course.color, days, id: sub.id});
+        if (days >= 14) overdue.push({name: sub.name, course: examOf(course.code), color: course.color, days, id: sub.id});
       });
     });
   });
