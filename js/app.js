@@ -31,22 +31,14 @@ function shuffle(arr){
 // State
 let state = {
   view:'home',
-  variant:1,
   module:'ALL',
-  fcIndex:0, fcFlipped:false, fcDeck:[], fcPool:[], fcWeakQueue:[], fcReviewRound:false, fcTotalReviewed:0, fcSessionSize:null,
-  paIndex:0, paText:'', paStatus:'idle', paVerdict:null, paScore:0, paDeck:[], paWeakQueue:[], paReviewRound:false, paStartTime:null, aiMarking:false, paAIFeedback:'',
-  taskDone:[true,false,false],
-  rStatus:'idle', rIndex:0, rCode:null, rRan:false, rRunning:false, rOutput:[], rImages:[], rEnv:[], showHint:false, showModel:false,
-  aiRQuestions:[], aiGenerating:false, aiGenError:'', showKeyModal:false,
-  paQStartTime:null, paQDuration:0, paPreview:false,
-  selected:null,
+  fcIndex:0, fcFlipped:false, fcDeck:[], fcPool:[], fcWeakQueue:[], fcReviewRound:false, fcTotalReviewed:0, fcSessionSize:null, fcUndo:null,
   planEdit:false, planData:null, examDate:'2026-09-22', dailyGoal:45,
-  addingTo:null, addMod:'CM1A', addType:'Flashcards', chipDone:{},
+  addingTo:null, addMod:'CM1', addType:'Flashcards', chipDone:{},
   expandedTopics:{},
   expandedCourses:{CM1:true, CS1:true, CB1:true},
   planWeekOffset:0,
   drillSub: null,
-  examMode:false, examModeEnd:null,
   theme:'auto',
 };
 
@@ -228,7 +220,7 @@ window.addStudyReminder=function(){
   const dtstamp=now.getUTCFullYear()+pad(now.getUTCMonth()+1)+pad(now.getUTCDate())+'T'+pad(now.getUTCHours())+pad(now.getUTCMinutes())+pad(now.getUTCSeconds())+'Z';
   const start=now.getFullYear()+pad(now.getMonth()+1)+pad(now.getDate());
   let ics='BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Tabula//Study//EN\r\nCALSCALE:GREGORIAN\r\n';
-  ics+='BEGIN:VEVENT\r\nUID:tabula-daily-'+start+'@tabula\r\nDTSTAMP:'+dtstamp+'\r\nDTSTART:'+start+'T180000\r\nDURATION:PT30M\r\nRRULE:FREQ=DAILY\r\nSUMMARY:'+icsEsc('📚 Tabula study session')+'\r\nDESCRIPTION:'+icsEsc('Daily actuarial revision — flashcards + practice')+'\r\nBEGIN:VALARM\r\nTRIGGER:PT0S\r\nACTION:DISPLAY\r\nDESCRIPTION:'+icsEsc('Time to study')+'\r\nEND:VALARM\r\nEND:VEVENT\r\n';
+  ics+='BEGIN:VEVENT\r\nUID:tabula-daily-'+start+'@tabula\r\nDTSTAMP:'+dtstamp+'\r\nDTSTART:'+start+'T180000\r\nDURATION:PT30M\r\nRRULE:FREQ=DAILY\r\nSUMMARY:'+icsEsc('📚 Tabula study session')+'\r\nDESCRIPTION:'+icsEsc('Daily actuarial revision — flashcards')+'\r\nBEGIN:VALARM\r\nTRIGGER:PT0S\r\nACTION:DISPLAY\r\nDESCRIPTION:'+icsEsc('Time to study')+'\r\nEND:VALARM\r\nEND:VEVENT\r\n';
   if(state.examDate){
     const ex=state.examDate.replace(/-/g,'');
     ics+='BEGIN:VEVENT\r\nUID:tabula-exam@tabula\r\nDTSTAMP:'+dtstamp+'\r\nDTSTART;VALUE=DATE:'+ex+'\r\nSUMMARY:'+icsEsc('🎓 IFoA exam day')+'\r\nBEGIN:VALARM\r\nTRIGGER:-P7D\r\nACTION:DISPLAY\r\nDESCRIPTION:'+icsEsc('Exam in one week')+'\r\nEND:VALARM\r\nEND:VEVENT\r\n';
@@ -249,18 +241,6 @@ function showToast(msg){
   setTimeout(()=>{t.style.opacity='0';setTimeout(()=>t.remove(),400);},2500);
 }
 
-// Written question history — keyed by a stable hash of the question stem
-function _qHash(q){
-  const s=(q.stem||q.prompt||'').slice(0,80)+(q.sub||'');
-  let h=0;for(let i=0;i<s.length;i++){h=((h<<5)-h)+s.charCodeAt(i);h|=0;}
-  return (q.sub||'q')+'_'+Math.abs(h).toString(36);
-}
-function loadWrittenHistory(){
-  try{const s=localStorage.getItem('tabula_written_v1');if(s)return JSON.parse(s);}catch(e){}
-  return {};
-}
-function saveWrittenHistory(){localStorage.setItem('tabula_written_v1',JSON.stringify(writtenHistory));}
-let writtenHistory=loadWrittenHistory();
 
 // Compute overall mastery across all subtopics (unseen subtopics count as 0%)
 function computeOverallMastery(){
@@ -461,17 +441,6 @@ function render(){
   }
 }
 
-function syncScroll(){
-  const ta=document.getElementById('r-code-ta');
-  const pre=document.getElementById('r-code-pre');
-  if(ta&&pre){pre.scrollTop=ta.scrollTop;pre.scrollLeft=ta.scrollLeft;}
-}
-function updateLineNums(code){
-  const gutter=document.getElementById('rs-gutter');
-  if(!gutter)return;
-  const lines=(code||'').split('\n').length;
-  gutter.innerHTML=Array.from({length:lines},(_,i)=>`<span class="rs-gutter-num">${i+1}</span>`).join('');
-}
 
 const NAV_VIEWS=[
   {id:'home',label:'Dashboard',icon:`<svg width="18" height="18" viewBox="0 0 20 20" fill="none"><rect x="3" y="3" width="6" height="6" rx="1.6" fill="currentColor"/><rect x="11" y="3" width="6" height="6" rx="1.6" fill="currentColor" opacity=".4"/><rect x="3" y="11" width="6" height="6" rx="1.6" fill="currentColor" opacity=".4"/><rect x="11" y="11" width="6" height="6" rx="1.6" fill="currentColor"/></svg>`},
@@ -910,7 +879,6 @@ function renderAddModal(){
         <label class="form-label">Type</label>
         <select onchange="state.addType=this.value">
           <option${state.addType==='Flashcards'?' selected':''}>Flashcards</option>
-          <option${state.addType==='Written'?' selected':''}>Written</option>
           <option${state.addType==='Review'?' selected':''}>Review</option>
         </select>
       </div>
@@ -1236,7 +1204,7 @@ window.toggleCourse=function(code){
   render();
 };
 
-function invalidateDecks(){state.fcDeck=[];state.paDeck=[];}
+function invalidateDecks(){state.fcDeck=[];state.fcPool=[];}
 
 window.toggleTopic_pool=function(topicId, val){
   const topic=SYLLABUS.flatMap(c=>c.topics).find(t=>t.id===topicId);
@@ -1286,7 +1254,7 @@ window.confirmAdd=function(dayIndex){
   if(!plan||dayIndex===null)return;
   const mod=MODULES.find(m=>m.id===state.addMod);
   const color=mod?mod.color:'#616B7A';
-  const typeMap={'Flashcards':'flashcards','Written':'practice','Review':null};
+  const typeMap={'Flashcards':'flashcards','Review':null};
   plan[dayIndex].chips.push({
     label:`${state.addMod} · ${state.addType}`,
     color,

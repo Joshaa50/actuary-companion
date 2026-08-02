@@ -109,16 +109,10 @@ textarea:focus{border-color:#3D6FD1;box-shadow:0 0 0 3px rgba(61,111,209,0.12)}
 .rating-good:hover{background:#F0FAF8}
 .rating-easy{color:#3D6FD1;border-color:#3D6FD1;background:transparent}
 .rating-easy:hover{background:var(--tint-blue)}
-/* Practice */
-.pa-stem{font-family:'Lexend','Hanken Grotesk',sans-serif;font-size:16.5px;line-height:1.75;letter-spacing:.012em;color:var(--t1);margin-bottom:20px;max-width:62ch}
-/* Dyslexia-friendly reading block: model answers, feedback, hints */
-.rd{font-family:'Lexend','Hanken Grotesk',sans-serif;font-size:14.5px;line-height:1.9;letter-spacing:.012em;word-spacing:.04em;color:var(--t1);max-width:68ch}
-/* Key terms: soft yellow highlight instead of plain bold; never italics
-   (BDA guidance) — emphasis becomes upright blue semibold */
-.rd strong,.fc-a strong,.pa-stem strong{font-weight:600;background:var(--hl);color:var(--hl-t);padding:0 4px;border-radius:4px}
-.rd em,.fc-a em,.pa-stem em{font-style:normal;font-weight:600;color:#3D6FD1}
-/* Cream question card with module-colour accent (set inline per module) */
-.stem-card{background:var(--card-paper);border-color:var(--card-paper-bd)}
+/* Flashcard answer formatting (dyslexia-friendly): key terms get a soft
+   highlight instead of plain bold; emphasis becomes upright blue semibold */
+.fc-a strong{font-weight:600;background:var(--hl);color:var(--hl-t);padding:0 4px;border-radius:4px}
+.fc-a em{font-style:normal;font-weight:600;color:#3D6FD1}
 /* Sentence-per-bullet chunks in answers (dyslexia-friendly short lines) */
 .rd-li{position:relative;padding-left:18px;margin:5px 0}
 .rd-li::before{content:'•';position:absolute;left:2px;color:#3D6FD1;font-weight:700}
@@ -126,68 +120,6 @@ textarea:focus{border-color:#3D6FD1;box-shadow:0 0 0 3px rgba(61,111,209,0.12)}
 /* Inline formulas get a soft blue chip so maths stands apart from prose */
 mjx-container:not([display="true"]){background:var(--tint-blue);padding:1px 5px;border-radius:5px}
 mjx-container[display="true"]{background:var(--tint-blue);padding:8px 12px;border-radius:8px;overflow-x:auto}
-.verdict-row{display:flex;gap:10px;margin-top:16px}
-.verdict-btn{padding:8px 18px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;border:1.5px solid;transition:all .12s;font-family:inherit}
-.v-incorrect{color:#C94040;border-color:#C94040;background:transparent}
-.v-incorrect:hover{background:#FDF2F2}
-.v-partial{color:#C97B30;border-color:#C97B30;background:transparent}
-.v-partial:hover{background:#FDF7F0}
-.v-correct{color:#2E9C8E;border-color:#2E9C8E;background:transparent}
-.v-correct:hover{background:#F0FAF8}
-/* ── RStudio-style 4-panel IDE ── */
-.rs-ide{border-radius:10px;overflow:hidden;border:1px solid #313244;background:#1E1E2E;font-family:'JetBrains Mono',monospace;font-size:12.5px;margin-bottom:16px;box-shadow:0 6px 28px rgba(0,0,0,.22);display:flex;flex-direction:column}
-/* Global toolbar */
-.rs-toolbar{background:#11111B;padding:0 12px;display:flex;align-items:center;justify-content:space-between;height:38px;border-bottom:1px solid #313244;flex-shrink:0}
-.rs-toolbar-left{display:flex;align-items:center;gap:10px}
-.rs-toolbar-dot{width:12px;height:12px;border-radius:50%}
-.rs-btn{border:none;border-radius:5px;padding:4px 12px;font-size:11.5px;font-weight:600;cursor:pointer;font-family:'JetBrains Mono',monospace;display:inline-flex;align-items:center;gap:4px;transition:all .12s;line-height:1}
-.rs-btn-run{background:#2E9C8E;color:#fff}.rs-btn-run:hover:not(:disabled){background:#26887B}.rs-btn-run:disabled{opacity:.45;cursor:default}
-.rs-btn-ghost{background:#1E1E2E;color:#7F849C;border:1px solid #313244}.rs-btn-ghost:hover{background:#313244;color:#CDD6F4}
-.rs-status{font-size:11px;padding:2px 8px;border-radius:4px;font-weight:600;letter-spacing:.02em}
-.rs-status-idle{color:#585B70}
-.rs-status-loading{color:#FAB387;background:#FAB38718}
-.rs-status-ready{color:#A6E3A1;background:#A6E3A118}
-.rs-status-error{color:#F38BA8;background:#F38BA818}
-/* 4-panel body */
-.rs-body{display:flex;flex:1;min-height:0}
-.rs-left{display:flex;flex-direction:column;flex:0 0 62%;border-right:1px solid #313244;min-height:0}
-.rs-right{display:flex;flex-direction:column;flex:1;min-height:0}
-/* Panel header bar (used across all 4 panels) */
-.rs-panel-bar{background:#181825;padding:0 12px;height:28px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #313244;flex-shrink:0}
-.rs-panel-tab{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
-.rs-panel-tab-blue{color:#89B4FA}
-.rs-panel-tab-orange{color:#FAB387}
-.rs-panel-tab-green{color:#A6E3A1}
-.rs-panel-tab-purple{color:#CBA6F7}
-.rs-panel-action{font-size:10.5px;color:#585B70;cursor:pointer;padding:1px 5px;border-radius:3px;border:none;background:none;font-family:'JetBrains Mono',monospace}.rs-panel-action:hover{color:#CDD6F4;background:#313244}
-/* Script editor */
-.rs-editor-body{display:flex;flex:1;overflow:hidden;min-height:0}
-.rs-gutter{padding:8px 0;background:#181825;border-right:1px solid #313244;min-width:40px;text-align:right;user-select:none;flex-shrink:0;overflow:hidden}
-.rs-gutter-num{display:block;padding:0 8px;color:#45475A;font-size:11.5px;line-height:1.6;font-family:'JetBrains Mono',monospace}
-.rs-code-wrap{position:relative;flex:1;overflow:hidden}
-.rs-code-wrap pre{position:absolute;inset:0;padding:8px 10px;margin:0;pointer-events:none;white-space:pre-wrap;word-break:break-all;color:#CDD6F4;overflow:hidden;line-height:1.6;font-family:'JetBrains Mono',monospace;font-size:12.5px}
-.rs-code-wrap textarea{position:absolute;inset:0;background:transparent;color:transparent;caret-color:#CDD6F4;border:none;border-radius:0;padding:8px 10px;resize:none;width:100%;height:100%;box-shadow:none;font-family:'JetBrains Mono',monospace;font-size:12.5px;line-height:1.6;letter-spacing:0;outline:none;z-index:1}
-.rs-code-wrap textarea:focus{outline:none;border:none;box-shadow:none}
-/* Console */
-.rs-console-body{flex:1;padding:8px 12px;overflow-y:auto;color:#CDD6F4;font-size:12px;line-height:1.6;background:#1E1E2E;min-height:0}
-.r-out-line{color:#A6E3A1}
-.r-err-line{color:#F38BA8}
-.rs-prompt{color:#89DCEB;margin-right:4px;user-select:none}
-.rs-empty-msg{color:#45475A;font-style:italic}
-/* Environment */
-.rs-env-body{flex:1;overflow-y:auto;background:#1E1E2E;min-height:0}
-.rs-env-row{display:flex;align-items:baseline;padding:3px 12px;border-bottom:1px solid #1A1A2A;gap:8px}
-.rs-env-row:hover{background:#252535}
-.rs-env-name{color:#89DCEB;font-size:11.5px;min-width:90px;flex-shrink:0}
-.rs-env-type{color:#CBA6F7;font-size:10.5px;min-width:70px;flex-shrink:0}
-.rs-env-val{color:#CDD6F4;font-size:11px;opacity:.75;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.rs-env-empty{padding:12px;color:#45475A;font-style:italic;font-size:11.5px}
-/* Plots */
-.rs-plots-body{flex:1;overflow-y:auto;background:#252535;padding:10px;display:flex;flex-wrap:wrap;gap:8px;align-content:flex-start;min-height:0}
-.rs-plots-body img{max-width:100%;border-radius:6px;border:1px solid #313244}
-.rs-plots-empty{padding:12px;color:#45475A;font-style:italic;font-size:11.5px}
-.r-img-wrap{margin-top:10px}
-.r-img-wrap img{max-width:100%;border-radius:8px;border:1px solid var(--border)}
 /* Planner */
 .planner-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:10px}
 .plan-day{background:var(--s1);border:1px solid var(--border);border-radius:10px;padding:12px;min-height:120px;display:flex;flex-direction:column;gap:8px}
@@ -242,11 +174,6 @@ label.form-label{font-size:12.5px;color:var(--t2);font-weight:500;display:block;
 .danger-row:last-child{border-bottom:none}
 /* Overdue alert */
 .overdue-alert{background:#FEF2EE;border:1px solid #F8C8BB;border-radius:10px;padding:12px 16px}
-/* Exam timer */
-.exam-timer{font-variant-numeric:tabular-nums;font-family:'JetBrains Mono',monospace;font-size:20px;font-weight:700}
-.exam-timer.danger{color:#C94040}
-.exam-timer.warn{color:#C97B30}
-.exam-timer.ok{color:#2E9C8E}
 /* Keyboard hint */
 .kb-hint{font-size:11px;color:#6B7280;font-family:'JetBrains Mono',monospace;text-align:center;margin-top:12px;letter-spacing:.04em}
 .kb-key{display:inline-block;background:#F0F2F6;border:1px solid #D0D5DF;border-radius:4px;padding:1px 5px;font-size:10.5px;font-family:'JetBrains Mono',monospace;color:#6B7280}
@@ -276,27 +203,18 @@ label.form-label{font-size:12.5px;color:var(--t2);font-weight:500;display:block;
   .plan-day-head{order:1}
   .plan-day-date{order:2;font-size:18px}
   .plan-day .plan-chip,.plan-day .plan-add-btn{order:3;flex-basis:100%}
-  /* R IDE: stack the four panels full-width instead of a 4-pane desktop grid */
-  .rs-ide{height:auto!important}
-  .rs-body{flex-direction:column}
-  .rs-left,.rs-right{flex:none;width:100%;border-right:none}
-  .rs-editor-body{min-height:200px}
-  .rs-left>div[style*="flex:2"]{min-height:150px}
-  .rs-right>div{min-height:130px;border-bottom:1px solid #313244}
-  .rs-right{border-top:1px solid #313244}
   /* No physical keyboard on a phone — swap keyboard hints for swipe hints */
   .kb-hint{display:none}
   .swipe-hint{display:block}
   /* Larger, tappable module pills; let the meta row wrap instead of squashing */
   .pill{padding:10px 16px;font-size:13px;min-height:40px}
-  .pa-meta{flex-wrap:wrap;gap:8px}
   .btn{padding:10px 16px}
   .btn-sm{padding:8px 13px}
-  /* Rating / verdict buttons: full-width, 44px+ tall for comfortable thumbs */
-  .rating-row,.verdict-row{gap:8px}
-  .rating-btn,.verdict-btn{flex:1;padding:12px 6px;font-size:13.5px;min-height:46px}
+  /* Rating buttons: full-width, 44px+ tall for comfortable thumbs */
+  .rating-row{gap:8px}
+  .rating-btn{flex:1;padding:12px 6px;font-size:13.5px;min-height:46px}
   /* Comfortable reading measure on small screens */
-  .fc-q,.fc-a,.pa-stem,.rd{max-width:100%}
+  .fc-q,.fc-a{max-width:100%}
   .fc-card{padding:28px 22px}
 }
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -308,8 +226,8 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
   *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}
 }
 /* Tactile press feedback + no 300ms tap delay / double-tap zoom on controls */
-button,.pill,.mobile-nav-item,.fc-card,.plan-chip,.plan-add-btn,.topic-row,.rating-btn,.verdict-btn{touch-action:manipulation}
-.btn:active,.rating-btn:active,.verdict-btn:active,.pill:active,.week-nav-btn:active,.rs-btn:active{transform:scale(.97)}
+button,.pill,.mobile-nav-item,.fc-card,.plan-chip,.plan-add-btn,.topic-row,.rating-btn{touch-action:manipulation}
+.btn:active,.rating-btn:active,.pill:active,.week-nav-btn:active{transform:scale(.97)}
 .fc-card:active{transform:scale(.995)}
 /* Card capture horizontal drags itself; vertical scroll still passes through */
 .fc-card{touch-action:pan-y}

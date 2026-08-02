@@ -1,6 +1,6 @@
 // Tabula service worker — network-first everywhere so updates deploy immediately;
 // cache is the offline fallback
-const CACHE = 'tabula-v5';
+const CACHE = 'tabula-v6';
 // Relative paths so precache works both at localhost root and the GitHub Pages
 // subpath (/actuary-companion/) — absolute "/…" paths 404 on the subpath
 const SHELL = [
