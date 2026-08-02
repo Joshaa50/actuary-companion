@@ -80,9 +80,40 @@ function loadMastery(){
 }
 let mastery=loadMastery();
 function saveMastery(){localStorage.setItem('tabula_mastery_v1',JSON.stringify(mastery));}
-function recordCardRating(subId, rating){
-  if(!mastery[subId])mastery[subId]={seen:0,good:0,lastSeen:'',interval:1,easeFactor:2.5,nextReview:''};
-  const m=mastery[subId];
+
+// --- Per-card scheduling identity ----------------------------------------
+// Spaced-repetition state (interval/easeFactor/nextReview/seen/good) is keyed
+// per INDIVIDUAL card, not per subtopic, so rating one card only reschedules
+// that card. Subtopic-level figures (mastery %, coverage, weak/overdue areas)
+// are aggregated back up from the constituent cards via subStats().
+const CARDS_BY_SUB=(()=>{const m={};for(const c of CARDS){(m[c.sub]||(m[c.sub]=[])).push(c);}return m;})();
+function cardKey(c){
+  const s=c.module+'|'+c.sub+'|'+c.q;         // content hash → stable across reordering
+  let h=5381;for(let i=0;i<s.length;i++)h=((h<<5)+h+s.charCodeAt(i))|0;
+  return 'k'+(h>>>0).toString(36);
+}
+function subStats(subId){
+  let seen=0,good=0,last='';
+  for(const c of (CARDS_BY_SUB[subId]||[])){
+    const m=mastery[cardKey(c)];
+    if(!m)continue;
+    seen+=m.seen||0;good+=m.good||0;
+    if(m.lastSeen&&(!last||new Date(m.lastSeen)>new Date(last)))last=m.lastSeen;
+  }
+  return {seen,good,lastSeen:last};
+}
+// One-time cleanup: drop legacy per-subtopic mastery keys from before the
+// per-card model (they no longer match any card, so they'd just skew totals).
+(function(){
+  const valid=new Set();for(const c of CARDS)valid.add(cardKey(c));
+  let changed=false;
+  Object.keys(mastery).forEach(k=>{if(!valid.has(k)){delete mastery[k];changed=true;}});
+  if(changed)saveMastery();
+})();
+
+function recordCardRating(key, rating){
+  if(!mastery[key])mastery[key]={seen:0,good:0,lastSeen:'',interval:1,easeFactor:2.5,nextReview:''};
+  const m=mastery[key];
   // Ensure SM-2 fields exist for records created before this update
   if(!m.interval)m.interval=1;
   if(!m.easeFactor)m.easeFactor=2.5;
@@ -186,7 +217,7 @@ function checkMilestones(){
 function poolCoveragePct(){
   const pooled=CARDS.filter(c=>pool[c.sub]);
   if(!pooled.length)return 0;
-  const seen=pooled.filter(c=>{const m=mastery[c.sub];return m&&m.seen>0;}).length;
+  const seen=pooled.filter(c=>{const m=mastery[cardKey(c)];return m&&m.seen>0;}).length;
   return Math.round(seen/pooled.length*100);
 }
 function examReadiness(){
@@ -195,7 +226,7 @@ function examReadiness(){
   return Math.max(0,Math.min(100,Math.round(cov*0.4+mast*0.6)));
 }
 function cardsPerDayNeeded(){
-  const unseen=CARDS.filter(c=>pool[c.sub]).filter(c=>{const m=mastery[c.sub];return !m||m.seen<1;}).length;
+  const unseen=CARDS.filter(c=>pool[c.sub]).filter(c=>{const m=mastery[cardKey(c)];return !m||m.seen<1;}).length;
   return Math.ceil(unseen/Math.max(1,daysToExam()));
 }
 function daysSinceStudy(){
@@ -213,6 +244,8 @@ function daysSinceBackup(){const t=loadLastBackup();return t?Math.floor((Date.no
 //     iPhone notification: the OS Calendar/Reminders app does the alerting ---
 function icsEsc(s){return String(s).replace(/([\\,;])/g,'\\$1').replace(/\n/g,'\\n');}
 window.addStudyReminder=function(){
+  // Confirm first — clicking otherwise triggers an unexpected file download.
+  if(!confirm('Download a calendar file (.ics) with a daily 6 pm study reminder'+(state.examDate?' and your exam date':'')+'?\n\nOpen the downloaded file to add these reminders to your calendar app.')) return;
   const pad=n=>String(n).padStart(2,'0');
   const now=new Date();
   const dtstamp=now.getUTCFullYear()+pad(now.getUTCMonth()+1)+pad(now.getUTCDate())+'T'+pad(now.getUTCHours())+pad(now.getUTCMinutes())+pad(now.getUTCSeconds())+'Z';
@@ -342,7 +375,7 @@ function fcSessionCap(){
 }
 
 function cardIsDue(c){
-  const m=mastery[c.sub];
+  const m=mastery[cardKey(c)];
   if(!m||!m.nextReview)return true;
   const t=new Date();t.setHours(0,0,0,0);
   return new Date(m.nextReview)<=t;
@@ -358,7 +391,7 @@ function buildDecks(){
   // cards not yet due follow, sorted by soonest upcoming review date.
   const todaySM=new Date();todaySM.setHours(0,0,0,0);
   cards.sort((a,b)=>{
-    const am=mastery[a.sub];const bm=mastery[b.sub];
+    const am=mastery[cardKey(a)];const bm=mastery[cardKey(b)];
     const aNxt=am?.nextReview?new Date(am.nextReview):new Date(0);
     const bNxt=bm?.nextReview?new Date(bm.nextReview):new Date(0);
     const aDue=!am?.nextReview||aNxt<=todaySM;
@@ -449,7 +482,7 @@ const NAV_VIEWS=[
 
 function renderMobileNav(){
   const now=new Date();now.setHours(0,0,0,0);
-  const badge=CARDS.filter(c=>pool[c.sub]).filter(c=>{const m=mastery[c.sub];return !m?.nextReview||new Date(m.nextReview)<=now;}).length;
+  const badge=CARDS.filter(c=>pool[c.sub]).filter(c=>{const m=mastery[cardKey(c)];return !m?.nextReview||new Date(m.nextReview)<=now;}).length;
   return `<nav class="mobile-nav" aria-label="Main navigation">
     ${NAV_VIEWS.map(v=>{const lbl=v.id==='home'?'Home':v.id==='flashcards'?'Cards':v.label;return `<div class="mobile-nav-item${state.view===v.id?' active':''}" role="button" tabindex="0" aria-label="${lbl}${v.id==='flashcards'&&badge>0?', '+badge+' due':''}"${state.view===v.id?' aria-current="page"':''} onclick="go('${v.id}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();go('${v.id}')}">
       <div style="position:relative;display:flex;align-items:center;justify-content:center">
@@ -466,7 +499,7 @@ function renderSidebar(){
   const d=daysToExam();
   // QW-3: count SM-2 due cards for badge
   const _sidebarNow=new Date();_sidebarNow.setHours(0,0,0,0);
-  const _fcDueBadge=CARDS.filter(c=>pool[c.sub]).filter(c=>{const m=mastery[c.sub];return !m?.nextReview||new Date(m.nextReview)<=_sidebarNow;}).length;
+  const _fcDueBadge=CARDS.filter(c=>pool[c.sub]).filter(c=>{const m=mastery[cardKey(c)];return !m?.nextReview||new Date(m.nextReview)<=_sidebarNow;}).length;
   return `<div class="sidebar">
     <div class="sidebar-logo">
       <div class="logo-mark"><svg width="18" height="18" viewBox="0 0 20 20"><rect x="3" y="3" width="6" height="6" rx="1.5"/><rect x="11" y="3" width="6" height="6" rx="1.5" opacity=".6"/><rect x="3" y="11" width="6" height="6" rx="1.5" opacity=".6"/><rect x="11" y="11" width="6" height="6" rx="1.5" opacity=".3"/></svg></div>
@@ -720,17 +753,17 @@ function renderHome(){
         const due=moduleCardsDue(m.id);
         const fill=due>0?Math.round(mast/100*circ*10)/10:0;
         const ringColor=due>0?m.color:'#D0D5DE';
-        const nameColor=due>0?'#1B2330':'#616B7A';
+        const nameColor=due>0?'var(--t1)':'var(--t2)';   // theme-aware (was hard-coded #1B2330 → invisible in dark mode)
         return `<div class="flex items-center gap-8 mb-12" style="cursor:pointer" onclick="go('progress')">
-          <svg width="32" height="32" viewBox="0 0 60 60">
+          <svg width="32" height="32" viewBox="0 0 60 60" style="flex-shrink:0">
             <circle cx="30" cy="30" r="26" class="ring-bg"/>
             <circle cx="30" cy="30" r="26" class="ring-fill progress-ring" stroke="${ringColor}" stroke-dasharray="${fill} ${circ-fill}"/>
           </svg>
-          <div style="flex:1">
-            <div style="font-size:13px;font-weight:600;color:${nameColor}">${m.name}</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:600;color:${nameColor};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${m.name}</div>
             <div style="font-size:11.5px;color:var(--t2)">${due>0?mast+'% mastery · '+due+' in pool':'not in pool'}</div>
           </div>
-          ${due>0?`<span class="due-badge">${due}</span>`:''}
+          ${due>0?`<span class="due-badge" style="flex-shrink:0">${due}</span>`:''}
         </div>`;
       }).join('')}
     </div>
@@ -842,12 +875,14 @@ function renderPlanner(){
           <div class="plan-day-date">${day.date}</div>
           ${day.monthYear?`<div style="font-size:10px;color:#6B7280">${day.monthYear}</div>`:''}
         </div>
-        ${day.chips.map((chip,ci)=>`
-          <div class="plan-chip" style="background:${chip.color}">
+        ${day.chips.map((chip,ci)=>{
+          const clickable=!state.planEdit&&chip.modId;   // read-only chips jump into that module's flashcards
+          return `
+          <div class="plan-chip" style="background:${chip.color}${clickable?';cursor:pointer':''}"${clickable?` role="button" tabindex="0" title="Start ${chip.modId} flashcards" onclick="startFromChip('${chip.modId}','${chip.type||''}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();startFromChip('${chip.modId}','${chip.type||''}')}"`:''}>
             <span class="plan-chip-label">${chip.label}</span>
             ${state.planEdit?`<span onclick="removeChip(${di},${ci})" style="cursor:pointer;opacity:.8;font-size:14px;flex-shrink:0">×</span>`:''}
-          </div>
-        `).join('')}
+          </div>`;
+        }).join('')}
         ${isCurrentWeek&&!state.planEdit&&di===todayIdx?`
           <div style="margin-top:4px;font-size:11px;color:#2E9C8E;font-weight:600">← today</div>
         `:''}
@@ -1110,15 +1145,16 @@ function renderProgress(){
 }
 
 function subMastery(id){
-  const m=mastery[id];
-  if(!m||m.seen<1) return 0;
-  return Math.round(m.good/m.seen*100);
+  const s=subStats(id);
+  return s.seen<1?0:Math.round(s.good/s.seen*100);
 }
 
-// Coverage = % of sub-topics in a topic that have been studied at least once
+// Coverage = % of a sub-topic's cards that have been studied at least once
 function subCoverage(id){
-  const m=mastery[id];
-  return (m&&m.seen>0)?100:0;
+  const cards=CARDS_BY_SUB[id]||[];
+  if(!cards.length) return 0;
+  const seen=cards.filter(c=>{const m=mastery[cardKey(c)];return m&&m.seen>0;}).length;
+  return Math.round(seen/cards.length*100);
 }
 
 function topicCoverage(topic){
@@ -1172,14 +1208,15 @@ window.rateCard=function(rating){
   const card=cards[state.fcIndex];
   // Snapshot everything a rating touches so it can be undone (fat-finger fix).
   if(card){
+    const key=cardKey(card);
     state.fcUndo={
-      subId:card.sub,
-      m:mastery[card.sub]?JSON.stringify(mastery[card.sub]):null,
+      key,
+      m:mastery[key]?JSON.stringify(mastery[key]):null,
       stats:JSON.stringify(studyStats),
       deck:state.fcDeck.slice(),weak:state.fcWeakQueue.slice(),pool:(state.fcPool||[]).slice(),
       index:state.fcIndex,review:state.fcReviewRound,total:state.fcTotalReviewed
     };
-    recordCardRating(card.sub, rating);
+    recordCardRating(key, rating);
     if(rating==='again'||rating==='hard') state.fcWeakQueue.push(card);
     state.fcTotalReviewed++;
   }
@@ -1204,7 +1241,7 @@ window.resetFC=function(){
 // Undo the most recent flashcard rating and put the card back in front of you.
 window.undoRating=function(){
   const u=state.fcUndo;if(!u)return;
-  if(u.m===null)delete mastery[u.subId];else mastery[u.subId]=JSON.parse(u.m);
+  if(u.m===null)delete mastery[u.key];else mastery[u.key]=JSON.parse(u.m);
   saveMastery();
   studyStats=JSON.parse(u.stats);saveStudyStats();
   state.fcDeck=u.deck;state.fcWeakQueue=u.weak;state.fcPool=u.pool;
@@ -1590,11 +1627,11 @@ function renderDangerZone() {
     course.topics.forEach(topic => {
       topic.subs.forEach(sub => {
         if (!pool[sub.id]) return;
-        const m = mastery[sub.id];
-        if (!m || m.seen < 1) return;            // only judge what's been studied
-        const pct = Math.round(m.good / m.seen * 100);
+        const st = subStats(sub.id);
+        if (st.seen < 1) return;                 // only judge what's been studied
+        const pct = Math.round(st.good / st.seen * 100);
         if (pct >= WEAK_PCT) return;             // strong enough → not a weak area
-        rows.push({id: sub.id, name: sub.name, num: sub.num, course: examOf(course.code), color: course.color, pct, seen: m.seen});
+        rows.push({id: sub.id, name: sub.name, num: sub.num, course: examOf(course.code), color: course.color, pct, seen: st.seen});
       });
     });
   });
@@ -1684,9 +1721,9 @@ function renderOverdueAlerts() {
     course.topics.forEach(topic => {
       topic.subs.forEach(sub => {
         if (!pool[sub.id]) return;
-        const m = mastery[sub.id];
-        if (!m || !m.lastSeen) return; // never studied → not overdue
-        const days = Math.floor((now - new Date(m.lastSeen).getTime()) / 86400000);
+        const st = subStats(sub.id);
+        if (!st.lastSeen) return; // never studied → not overdue
+        const days = Math.floor((now - new Date(st.lastSeen).getTime()) / 86400000);
         if (days >= 14) overdue.push({name: sub.name, course: examOf(course.code), color: course.color, days, id: sub.id});
       });
     });
