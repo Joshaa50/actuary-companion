@@ -177,7 +177,30 @@ let studyStats=loadStudyStats();
 // ============================================================
 
 // --- Long-term trend history: one snapshot per calendar day ---
-function loadHistory(){try{const s=localStorage.getItem('tabula_history_v1');if(s)return JSON.parse(s);}catch(e){}return [];}
+// A single bad snapshot (corrupt date, out-of-range %) would otherwise sit in
+// the trend chart forever with no way for the user to clear it. Validate every
+// entry on load and, if any were dropped, persist the repaired list immediately.
+function isValidHistoryEntry(h){
+  if(!h||typeof h!=='object')return false;
+  const d=new Date(h.date+'T00:00:00'); if(isNaN(d))return false;
+  const y=d.getFullYear(); if(y<2020||y>2100)return false;
+  const pct=v=>typeof v==='number'&&isFinite(v)&&v>=0&&v<=100;
+  return pct(h.mastery)&&pct(h.readiness);
+}
+function loadHistory(){
+  try{
+    const s=localStorage.getItem('tabula_history_v1');
+    if(s){
+      const arr=JSON.parse(s);
+      if(Array.isArray(arr)){
+        const clean=arr.filter(isValidHistoryEntry);
+        if(clean.length!==arr.length){try{localStorage.setItem('tabula_history_v1',JSON.stringify(clean.slice(-180)));}catch(e){}}
+        return clean;
+      }
+    }
+  }catch(e){}
+  return [];
+}
 let studyHistory=loadHistory();
 function saveHistory(){try{localStorage.setItem('tabula_history_v1',JSON.stringify(studyHistory.slice(-180)));}catch(e){}}
 function recordDailySnapshot(){
@@ -325,7 +348,13 @@ function saveChipDone(){localStorage.setItem('tabula_chipdone_v1',JSON.stringify
 function loadExamDate(){
   try{
     const s=localStorage.getItem('tabula_examdate_v1');
-    if(s)return JSON.parse(s);
+    if(s){
+      const o=JSON.parse(s);
+      // Repair a date corrupted by an earlier build (or a stray edit) so the
+      // countdown can't get stuck on garbage the user has no way to clear.
+      if(o&&!sanitizeExamDate(o.examDate))o.examDate='2026-09-22';
+      return o;
+    }
   }catch(e){}
   return {examDate:'2026-09-22',dailyGoal:45,sessionSize:null};
 }
@@ -456,9 +485,15 @@ function render(){
     </div>`;
     return;
   }
-  // Typeset any LaTeX in newly rendered content
+  // Typeset any LaTeX in newly rendered content. render() replaces #app's
+  // innerHTML every call, so the math nodes from the previous render are already
+  // detached. typesetClear() drops them from MathJax's internal list first —
+  // without it that list grows unbounded across a long session and each typeset
+  // has to walk every stale entry, which can stall the main thread after heavy
+  // use. Scope typesetting to #app so we only process what's actually on screen.
   if(window.MathJax&&MathJax.typesetPromise){
-    MathJax.typesetPromise().catch(()=>{});
+    try{ if(MathJax.typesetClear) MathJax.typesetClear(); }catch(e){}
+    MathJax.typesetPromise([app]).catch(()=>{});
   }
   // Set indeterminate state on topic checkboxes (partial selection)
   if(state.view==='progress'){
@@ -506,8 +541,8 @@ function renderSidebar(){
       <div><div class="sidebar-logo-text">Tabula</div><div class="sidebar-logo-sub">IFoA Study Companion</div></div>
     </div>
     <div class="sidebar-section">Study</div>
-    ${views.map(v=>`<div class="nav-item${state.view===v.id?' active':''}" onclick="go('${v.id}')" style="display:flex;align-items:center">
-      <span class="nav-icon">${v.icon}</span>${v.label}${v.id==='flashcards'&&_fcDueBadge>0?`<span style="margin-left:auto;background:#C94040;color:#fff;font-size:9.5px;font-weight:700;padding:1px 6px;border-radius:10px;min-width:18px;text-align:center;line-height:1.5">${_fcDueBadge}</span>`:''}
+    ${views.map(v=>`<div class="nav-item${state.view===v.id?' active':''}" role="button" tabindex="0"${state.view===v.id?' aria-current="page"':''} aria-label="${v.label}${v.id==='flashcards'&&_fcDueBadge>0?', '+_fcDueBadge+' due':''}" onclick="go('${v.id}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();go('${v.id}')}" style="display:flex;align-items:center">
+      <span class="nav-icon" aria-hidden="true">${v.icon}</span>${v.label}${v.id==='flashcards'&&_fcDueBadge>0?`<span aria-hidden="true" style="margin-left:auto;background:#C94040;color:#fff;font-size:9.5px;font-weight:700;padding:1px 6px;border-radius:10px;min-width:18px;text-align:center;line-height:1.5">${_fcDueBadge}</span>`:''}
     </div>`).join('')}
     <div class="sidebar-bottom">
       <div class="exam-card mb-12">
@@ -526,13 +561,14 @@ function renderSidebar(){
 
 function formatExamDate(d){
   if(!d)return '';
-  const dt=new Date(d);
+  const dt=new Date(d+'T00:00:00');
+  if(isNaN(dt))return '';
   return dt.toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'});
 }
 
 function renderTopbar(){
-  const titles={home:'Dashboard',planner:'Weekly Planner',flashcards:'Flashcards',progress:'Progress'};
-  const subs={home:'Good luck today — keep going!',planner:'Plan your study week',flashcards:'Spaced repetition review',progress:'Track notes coverage · controls your study pool'};
+  const titles={home:'Dashboard',planner:'Weekly Planner',flashcards:'Flashcards',progress:'Topics & Progress'};
+  const subs={home:'Good luck today — keep going!',planner:'Plan your study week',flashcards:'Spaced repetition review',progress:'Choose the topics you\'re studying · ticked sections feed your flashcards'};
   return `<div class="topbar">
     <div>
       <div class="topbar-title">${titles[state.view]||''}</div>
@@ -547,13 +583,13 @@ function renderTopbar(){
 
 function renderModulePills(){
   const pills=['ALL',...MODULES.map(m=>m.id)];
-  return `<div style="display:flex;gap:6px;flex-wrap:wrap">
+  return `<div role="group" aria-label="Filter flashcards by module" style="display:flex;gap:6px;flex-wrap:wrap">
     ${pills.map(p=>{
       const mod=MODULES.find(m=>m.id===p);
       const color=mod?mod.color:'#616B7A';
       const label=p==='ALL'?'All':p;
       const active=state.module===p;
-      return `<div class="pill${active?' pill-active':''}" style="color:${color};background:${active?color+'18':'transparent'}" onclick="setModule('${p}')">${label}</div>`;
+      return `<div class="pill${active?' pill-active':''}" role="button" tabindex="0" aria-pressed="${active}" aria-label="${p==='ALL'?'Show all modules':'Filter by '+p}" style="color:${color};background:${active?color+'18':'transparent'}" onclick="setModule('${p}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();setModule('${p}')}">${label}</div>`;
     }).join('')}
   </div>`;
 }
@@ -779,7 +815,7 @@ function renderHome(){
         <div class="flex items-center gap-10 mb-8">
           <input type="checkbox" ${state.chipDone[ti+'-'+i]?'checked':''} onchange="toggleChip(${ti},${i},this.checked)">
           <div class="plan-chip" style="background:${chip.color};flex:1">
-            <span class="plan-chip-label">${chip.label}</span>
+            <span class="plan-chip-label" title="${chip.label}">${chip.label}</span>
           </div>
           ${chip.modId?`<button class="btn btn-primary btn-sm" onclick="startFromChip('${chip.modId}','${chip.type||''}')">Start</button>`:''}
         </div>
@@ -839,7 +875,7 @@ function renderPlanner(){
     <div class="flex items-center gap-12">
       <div>
         <label class="form-label">Exam date</label>
-        <input type="date" value="${state.examDate}" onchange="setExamDate(this.value)" style="font-family:inherit;font-size:13px;border:1px solid var(--border);border-radius:8px;padding:6px 10px;color:var(--t1);background:var(--s1);outline:none">
+        <input type="date" value="${state.examDate}" min="${new Date().getFullYear()-1}-01-01" max="${new Date().getFullYear()+15}-12-31" onchange="setExamDate(this.value)" style="font-family:inherit;font-size:13px;border:1px solid var(--border);border-radius:8px;padding:6px 10px;color:var(--t1);background:var(--s1);outline:none">
       </div>
       <div>
         <label class="form-label">Daily goal (cards)</label>
@@ -879,7 +915,7 @@ function renderPlanner(){
           const clickable=!state.planEdit&&chip.modId;   // read-only chips jump into that module's flashcards
           return `
           <div class="plan-chip" style="background:${chip.color}${clickable?';cursor:pointer':''}"${clickable?` role="button" tabindex="0" title="Start ${chip.modId} flashcards" onclick="startFromChip('${chip.modId}','${chip.type||''}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();startFromChip('${chip.modId}','${chip.type||''}')}"`:''}>
-            <span class="plan-chip-label">${chip.label}</span>
+            <span class="plan-chip-label" title="${chip.label}">${chip.label}</span>
             ${state.planEdit?`<span onclick="removeChip(${di},${ci})" style="cursor:pointer;opacity:.8;font-size:14px;flex-shrink:0">×</span>`:''}
           </div>`;
         }).join('')}
@@ -1332,8 +1368,24 @@ window.removeChip=function(dayIndex,chipIndex){
   render();
 };
 
+// A <input type="date"> commits intermediate values while you type the year, so
+// a half-typed "2" briefly becomes year 0002. Reject anything that isn't a real
+// date inside a sane window, otherwise the countdown shows "0 days" and a
+// garbled date. Returns the normalised YYYY-MM-DD string, or null if invalid.
+function sanitizeExamDate(val){
+  if(!val||typeof val!=='string')return null;
+  const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(val.trim());
+  if(!m)return null;
+  const d=new Date(val+'T00:00:00');
+  if(isNaN(d))return null;
+  const y=+m[1], nowY=new Date().getFullYear();
+  if(y<nowY-1||y>nowY+15)return null;
+  return val;
+}
 window.setExamDate=function(val){
-  state.examDate=val;
+  const ok=sanitizeExamDate(val);
+  if(!ok){ showToast('Enter a valid exam date'); render(); return; }
+  state.examDate=ok;
   saveExamDate();
   render();
 };
