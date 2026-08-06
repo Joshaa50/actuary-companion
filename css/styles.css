@@ -54,13 +54,14 @@ html,body{height:100%;font-family:'Hanken Grotesk',sans-serif;background:var(--s
 .topbar-right{display:flex;align-items:center;gap:12px}
 .page-content{padding:28px;flex:1}
 .card{background:var(--s1);border:1px solid var(--border);border-radius:12px;padding:20px}
-.card-sm{padding:14px 16px}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:8px 16px;border-radius:8px;font-size:13.5px;font-weight:600;cursor:pointer;border:none;transition:all .15s;font-family:inherit;line-height:1}
 .btn-primary{background:#3D6FD1;color:#fff}
 .btn-primary:hover{background:#3562c0}
 .btn-ghost{background:transparent;color:var(--t2);border:1px solid var(--border)}
 .btn-ghost:hover{background:var(--s2);color:var(--t1)}
 .btn-sm{padding:5px 12px;font-size:12.5px}
+.btn:disabled,button:disabled{opacity:.4;cursor:not-allowed}
+.btn:disabled:hover{background:transparent;color:var(--t2)}
 .pill{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;border:1.5px solid transparent;transition:all .12s;user-select:none}
 .pill-active{border-color:currentColor;background:rgba(61,111,209,0.08)}
 .progress-ring{transform:rotate(-90deg);transform-origin:center}
@@ -70,7 +71,6 @@ textarea{font-family:'Lexend','Hanken Grotesk',sans-serif;font-size:15px;border:
 textarea:focus{border-color:#3D6FD1;box-shadow:0 0 0 3px rgba(61,111,209,0.12)}
 .badge{display:inline-flex;align-items:center;padding:3px 8px;border-radius:5px;font-size:11.5px;font-weight:600}
 .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-.grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
 .grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
 .gap-12{gap:12px}
 .mb-4{margin-bottom:4px}
@@ -80,18 +80,12 @@ textarea:focus{border-color:#3D6FD1;box-shadow:0 0 0 3px rgba(61,111,209,0.12)}
 .mb-20{margin-bottom:20px}
 .mb-24{margin-bottom:24px}
 .flex{display:flex}
-.flex-col{flex-direction:column}
 .items-center{align-items:center}
 .justify-between{justify-content:space-between}
 .gap-8{gap:8px}
-.gap-16{gap:16px}
-.gap-20{gap:20px}
 .text-secondary{color:var(--t2)}
 .text-sm{font-size:12.5px}
 .text-xs{font-size:11.5px}
-.fw-600{font-weight:600}
-.fw-700{font-weight:700}
-.mono{font-family:'JetBrains Mono',monospace}
 /* Flashcard — dyslexia-friendly: cream background (reduces glare vs pure
    white), Lexend reading font, left-aligned, generous spacing */
 .fc-card{background:var(--card-paper);border:1px solid var(--card-paper-bd);border-radius:16px;padding:36px 40px;min-height:260px;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;text-align:left;position:relative;cursor:pointer;transition:box-shadow .2s}
@@ -155,10 +149,6 @@ mjx-container[display="true"]{background:var(--tint-blue);padding:8px 12px;borde
 /* Dot streak */
 .streak-dots{display:flex;gap:5px;flex-wrap:wrap}
 .streak-dot{width:10px;height:10px;border-radius:50%}
-/* module color dots */
-.dot-cm1{background:#3D6FD1}
-.dot-cs1{background:#2E9C8E}
-.dot-cb1{background:#6B5DD3}
 /* overdue badge */
 .due-badge{display:inline-flex;align-items:center;padding:2px 7px;border-radius:12px;font-size:11.5px;font-weight:700;background:#FEF2EE;color:#C94040}
 /* checbox style */
@@ -190,7 +180,11 @@ label.form-label{font-size:12.5px;color:var(--t2);font-weight:500;display:block;
 @media(max-width:640px){
   .sidebar{display:none}
   .main{padding-bottom:calc(64px + env(safe-area-inset-bottom,0px))}
-  .topbar{padding:12px 16px}
+  /* Let a cramped header wrap instead of pushing controls off-screen */
+  .topbar{padding:12px 16px;flex-wrap:wrap;gap:10px}
+  /* Flashcards: give the theme toggle + module pills their own full-width row
+     below the title so pills don't wrap around the toggle and clip off-edge */
+  .topbar-right-fc{width:100%}
   .page-content{padding:16px}
   .mobile-nav{display:flex;position:fixed;bottom:0;left:0;right:0;background:var(--s1);border-top:1px solid var(--border);z-index:200;padding-bottom:env(safe-area-inset-bottom,0px)}
   .mobile-nav-item{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:9px 4px;min-height:52px;cursor:pointer;color:var(--t2);font-size:10px;font-weight:500;user-select:none;position:relative;-webkit-tap-highlight-color:transparent}
@@ -199,7 +193,6 @@ label.form-label{font-size:12.5px;color:var(--t2);font-weight:500;display:block;
   .mobile-nav-badge{position:absolute;top:3px;right:50%;transform:translateX(12px);background:#C94040;color:#fff;font-size:8px;font-weight:700;padding:1px 4px;border-radius:8px;min-width:14px;text-align:center;line-height:1.6}
   /* Stat cards: 2×2 instead of a sideways-scrolling row */
   .grid-4{grid-template-columns:1fr 1fr}
-  .grid-3{grid-template-columns:1fr 1fr}
   /* Weekly planner: stack the 7 days vertically so the whole week is visible */
   .planner-grid{grid-template-columns:1fr;gap:8px}
   .plan-day{min-height:0;flex-direction:row;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:12px 14px}

@@ -1,26 +1,15 @@
 // Tabula — Actuarial Study App
 // Main application logic
-function defaultPlan(){
-  const now=new Date();
-  const dow=now.getDay(); // 0=Sun
-  const monday=new Date(now);
-  monday.setDate(now.getDate()-((dow+6)%7));
-  const days=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-  const defaultChips=[
-    [{label:'CB1 · Flashcards',color:'#6B5DD3',modId:'CB1',type:'flashcards'}],
-    [{label:'CM1 · Flashcards',color:'#3D6FD1',modId:'CM1',type:'flashcards'},{label:'CS1 · Flashcards',color:'#2E9C8E',modId:'CS1',type:'flashcards'}],
-    [{label:'CS1 · Flashcards',color:'#2E9C8E',modId:'CS1',type:'flashcards'}],
-    [{label:'CM1 · Flashcards',color:'#3D6FD1',modId:'CM1',type:'flashcards'}],
-    [{label:'CM1 · Flashcards',color:'#3D6FD1',modId:'CM1',type:'flashcards'},{label:'CB1 · Flashcards',color:'#6B5DD3',modId:'CB1',type:'flashcards'}],
-    [{label:'Review',color:'#7B8595',modId:null,type:null}],
-    [],
-  ];
-  return days.map((day,i)=>{
-    const d=new Date(monday);
-    d.setDate(monday.getDate()+i);
-    return {day,date:String(d.getDate()),chips:defaultChips[i]};
-  });
+// Monday (local 00:00) of the week `offset` weeks from this one. Single source
+// of truth for all week math — planner storage keys, date labels, weekly stats.
+function mondayOf(offset=0){
+  const d=new Date();
+  d.setHours(0,0,0,0);
+  d.setDate(d.getDate()-((d.getDay()+6)%7)+offset*7);
+  return d;
 }
+// Index of today within a Mon–Sun week (0=Mon … 6=Sun).
+function todayIndex(){return (new Date().getDay()+6)%7;}
 
 function shuffle(arr){
   const a=arr.slice();
@@ -154,10 +143,9 @@ function recordCardRating(key, rating){
     showToast('Goal reached! 🎉');
   }
   // Per-day weekly tracking for activity chart
-  const mon=new Date();mon.setDate(mon.getDate()-((mon.getDay()+6)%7));mon.setHours(0,0,0,0);
-  const wk=mon.toDateString();
+  const wk=mondayOf().toDateString();
   if(studyStats.weekStart!==wk){studyStats.weekStart=wk;studyStats.weekCards=[0,0,0,0,0,0,0];}
-  const di=(new Date().getDay()+6)%7;
+  const di=todayIndex();
   studyStats.weekCards[di]=(studyStats.weekCards[di]||0)+1;
   saveStudyStats();
   recordDailySnapshot();
@@ -248,9 +236,13 @@ function examReadiness(){
   const mast=computeOverallMastery();
   return Math.max(0,Math.min(100,Math.round(cov*0.4+mast*0.6)));
 }
+function unseenPoolCount(){
+  return CARDS.filter(c=>pool[c.sub]).filter(c=>{const m=mastery[cardKey(c)];return !m||m.seen<1;}).length;
+}
 function cardsPerDayNeeded(){
-  const unseen=CARDS.filter(c=>pool[c.sub]).filter(c=>{const m=mastery[cardKey(c)];return !m||m.seen<1;}).length;
-  return Math.ceil(unseen/Math.max(1,daysToExam()));
+  const days=daysToExamSigned();
+  if(days<=0)return 0; // exam today or past → no meaningful per-day pace
+  return Math.ceil(unseenPoolCount()/days);
 }
 function daysSinceStudy(){
   if(!studyStats.lastStudyDate)return 999;
@@ -322,26 +314,6 @@ function moduleCardsDue(modId){
   return CARDS.filter(c=>examOf(c.module)===modId&&pool[c.sub]).length;
 }
 
-function loadPlan(){
-  try{
-    const s=localStorage.getItem('tabula_plan_v1');
-    if(s){
-      const plan=JSON.parse(s);
-      // Refresh date numbers to match the current week so saved plans don't show stale dates
-      const now=new Date();
-      const monday=new Date(now);
-      monday.setDate(now.getDate()-((now.getDay()+6)%7));
-      plan.forEach((day,i)=>{
-        const d=new Date(monday);
-        d.setDate(monday.getDate()+i);
-        day.date=String(d.getDate());
-      });
-      return plan;
-    }
-  }catch(e){}
-  return defaultPlan();
-}
-function savePlan(p){localStorage.setItem('tabula_plan_v1',JSON.stringify(p));}
 function loadChipDone(){try{const s=localStorage.getItem('tabula_chipdone_v1');if(s)return JSON.parse(s);}catch(e){}return {};}
 function saveChipDone(){localStorage.setItem('tabula_chipdone_v1',JSON.stringify(state.chipDone));}
 
@@ -371,7 +343,7 @@ function saveExamDate(){localStorage.setItem('tabula_examdate_v1',JSON.stringify
   // Ask the browser to keep our localStorage from being evicted (no prompt on
   // most mobile browsers) — the closest thing to durability without a server.
   try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist();}catch(e){}
-  state.planData=loadPlan();
+  state.planData=loadPlanForWeek(0);
   state.chipDone=loadChipDone();
   // One-time migration: copy any CS1B mastery stored under old bare IDs to cs1b-* IDs
   const cs1bOldToNew={
@@ -388,12 +360,18 @@ function saveExamDate(){localStorage.setItem('tabula_examdate_v1',JSON.stringify
   if(migrated)saveMastery();
 })();
 
-function daysToExam(){
-  const today=new Date();
-  const ex=new Date(state.examDate);
-  const diff=Math.round((ex-today)/(1000*60*60*24));
-  return Math.max(0,diff);
+// Signed days from today (local midnight) to the exam — negative once it's past.
+function daysToExamSigned(){
+  const today=new Date();today.setHours(0,0,0,0);
+  const ex=new Date(state.examDate+'T00:00:00');
+  if(isNaN(ex))return 0;
+  return Math.round((ex-today)/86400000);
 }
+// Non-negative countdown used across the UI (0 on/after exam day).
+function daysToExam(){return Math.max(0,daysToExamSigned());}
+// True once the exam date is in the past — used to flag a stale/mistyped date
+// instead of showing a "0 days" countdown and an absurd catch-up goal.
+function examLapsed(){return daysToExamSigned()<0;}
 
 // How many cards to review before the weak-card review round. Defaults to the
 // daily goal ("same number as the daily target") but can be set independently
@@ -409,6 +387,9 @@ function cardIsDue(c){
   const t=new Date();t.setHours(0,0,0,0);
   return new Date(m.nextReview)<=t;
 }
+
+// Cards in the study pool that are due for review today (drives the nav badges).
+function poolDueCount(){return CARDS.filter(c=>pool[c.sub]&&cardIsDue(c)).length;}
 
 function buildDecks(){
   let cards=CARDS;
@@ -516,8 +497,7 @@ const NAV_VIEWS=[
 ];
 
 function renderMobileNav(){
-  const now=new Date();now.setHours(0,0,0,0);
-  const badge=CARDS.filter(c=>pool[c.sub]).filter(c=>{const m=mastery[cardKey(c)];return !m?.nextReview||new Date(m.nextReview)<=now;}).length;
+  const badge=poolDueCount();
   return `<nav class="mobile-nav" aria-label="Main navigation">
     ${NAV_VIEWS.map(v=>{const lbl=v.id==='home'?'Home':v.id==='flashcards'?'Cards':v.label;return `<div class="mobile-nav-item${state.view===v.id?' active':''}" role="button" tabindex="0" aria-label="${lbl}${v.id==='flashcards'&&badge>0?', '+badge+' due':''}"${state.view===v.id?' aria-current="page"':''} onclick="go('${v.id}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();go('${v.id}')}">
       <div style="position:relative;display:flex;align-items:center;justify-content:center">
@@ -532,9 +512,7 @@ function renderMobileNav(){
 function renderSidebar(){
   const views=NAV_VIEWS;
   const d=daysToExam();
-  // QW-3: count SM-2 due cards for badge
-  const _sidebarNow=new Date();_sidebarNow.setHours(0,0,0,0);
-  const _fcDueBadge=CARDS.filter(c=>pool[c.sub]).filter(c=>{const m=mastery[cardKey(c)];return !m?.nextReview||new Date(m.nextReview)<=_sidebarNow;}).length;
+  const _fcDueBadge=poolDueCount(); // SM-2 due cards, shown as a sidebar badge
   return `<div class="sidebar">
     <div class="sidebar-logo">
       <div class="logo-mark"><svg width="18" height="18" viewBox="0 0 20 20"><rect x="3" y="3" width="6" height="6" rx="1.5"/><rect x="11" y="3" width="6" height="6" rx="1.5" opacity=".6"/><rect x="3" y="11" width="6" height="6" rx="1.5" opacity=".6"/><rect x="11" y="11" width="6" height="6" rx="1.5" opacity=".3"/></svg></div>
@@ -547,7 +525,7 @@ function renderSidebar(){
     <div class="sidebar-bottom">
       <div class="exam-card mb-12">
         <div class="exam-card-label">Exam countdown</div>
-        <div class="exam-card-days">${d} <span style="font-size:14px;font-weight:500;color:var(--t2)">days</span></div>
+        <div class="exam-card-days">${examLapsed()?'<span style="font-size:15px">Date passed</span>':d===0?'<span style="font-size:15px">Exam today</span>':d+' <span style="font-size:14px;font-weight:500;color:var(--t2)">days</span>'}</div>
         <div class="exam-card-sub">${formatExamDate(state.examDate)}</div>
       </div>
       <div style="display:flex;gap:6px">
@@ -574,7 +552,7 @@ function renderTopbar(){
       <div class="topbar-title">${titles[state.view]||''}</div>
       <div class="topbar-sub">${subs[state.view]||''}</div>
     </div>
-    <div class="topbar-right" style="gap:12px">
+    <div class="topbar-right${state.view==='flashcards'?' topbar-right-fc':''}" style="gap:12px">
       <button class="btn btn-sm btn-ghost" onclick="cycleTheme()" title="Theme: ${state.theme} (tap to change)" aria-label="Change theme, currently ${state.theme}">${themeIcon(state.theme)}</button>
       ${state.view==='flashcards'?renderModulePills():''}
     </div>
@@ -634,13 +612,15 @@ function renderReadiness(){
   const mast=computeOverallMastery();
   const need=cardsPerDayNeeded();
   const goal=state.dailyGoal||0;
+  const daysLeft=daysToExamSigned();
+  const lapsed=daysLeft<0;
   const col=r>=70?'#2E9C8E':r>=40?'#C97B30':'#C94040';
   const circ=163.4;const fill=Math.round(r/100*circ*10)/10;
   return `
   <div class="card mb-16">
     <div class="flex items-center justify-between mb-12">
       <div style="font-size:14px;font-weight:600">Exam readiness</div>
-      <div class="text-xs text-secondary">${daysToExam()} days left</div>
+      <div class="text-xs text-secondary">${lapsed?'Exam date passed':daysLeft===0?'Exam is today':daysLeft+' days left'}</div>
     </div>
     <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
       <svg width="76" height="76" viewBox="0 0 60 60" style="flex-shrink:0">
@@ -653,10 +633,16 @@ function renderReadiness(){
           <div><div class="text-xs text-secondary">Coverage</div><div style="font-size:15px;font-weight:700">${cov}%</div></div>
           <div><div class="text-xs text-secondary">Mastery</div><div style="font-size:15px;font-weight:700">${mast}%</div></div>
         </div>
-        <div style="font-size:12.5px;color:var(--t2)">
-          ${need>0?`~<strong style="color:var(--t1)">${need}</strong> new cards/day to see every topic before your exam.`:`You've seen every topic in your pool 🎉`}
-        </div>
-        ${need>goal&&need>0?`<button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="adjustGoalTo(${need})">Set daily goal to ${need}</button>`:need>0?`<div style="font-size:11.5px;color:#2E9C8E;font-weight:600;margin-top:6px">✓ Goal of ${goal}/day keeps you on pace</div>`:''}
+        ${lapsed
+          ?`<div style="font-size:12.5px;color:#C94040;font-weight:600">⚠ Your exam date has passed — update it so your pacing makes sense again.</div>
+            <button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="go('planner')">Update exam date</button>`
+          :daysLeft===0
+          ?`<div style="font-size:12.5px;color:var(--t2)">Exam day — good luck! 🍀</div>`
+          :`<div style="font-size:12.5px;color:var(--t2)">
+              ${need>0?`~<strong style="color:var(--t1)">${need}</strong> new cards/day to see every topic before your exam.`:`You've seen every topic in your pool 🎉`}
+            </div>
+            ${need>goal&&need>0?`<button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="adjustGoalTo(${need})">Set daily goal to ${need}</button>`:need>0?`<div style="font-size:11.5px;color:#2E9C8E;font-weight:600;margin-top:6px">✓ Goal of ${goal}/day keeps you on pace</div>`:''}`
+        }
       </div>
     </div>
     <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
@@ -733,7 +719,7 @@ function renderMilestones(){
 
 function renderHome(){
   const firstRun=!hasStudied();
-  const todayDi=(new Date().getDay()+6)%7;
+  const todayDi=todayIndex();
   const wc=studyStats.weekCards||[0,0,0,0,0,0,0];
   const maxCards=Math.max(...wc,1);
   const barData=[
@@ -742,7 +728,7 @@ function renderHome(){
   ];
   const dueCount=CARDS.filter(c=>pool[c.sub]).length;
   const overallMastPct=computeOverallMastery();
-  const totalReviewed=Object.values(mastery).reduce((a,v)=>a+v.seen,0);
+  const totalReviewed=totalCardsSeen();
 
   return `
   ${firstRun ? renderWelcome() : renderNudges()+renderOverdueAlerts()}
@@ -750,7 +736,7 @@ function renderHome(){
     ${statCard(dueCount,'Cards in pool','Across all modules')}
     ${statCard(overallMastPct+'%','Overall mastery','Based on card ratings')}
     ${statCard(studyStats.streak,'Day streak','Keep it up!')}
-    ${statCard(daysToExam()+'d','To exam',formatExamDate(state.examDate))}
+    ${statCard(examLapsed()?'Passed':daysToExamSigned()===0?'Today':daysToExam()+'d','To exam',formatExamDate(state.examDate))}
   </div>
   <div class="kb-hint" style="text-align:right;margin-top:-8px;margin-bottom:12px"><span class="kb-key">S</span> Start studying</div>
   ${firstRun ? '' : renderReadiness()}
@@ -811,7 +797,7 @@ function renderHome(){
         <div style="font-size:14px;font-weight:600">Today's plan</div>
         <button class="btn btn-ghost btn-sm" onclick="go('planner')">View planner</button>
       </div>
-      ${(()=>{const ti=(new Date().getDay()+6)%7;const todayChips=state.planData&&state.planData[ti]&&state.planData[ti].chips||[];return todayChips.map((chip,i)=>`
+      ${(()=>{const ti=todayIndex();const todayChips=loadPlanForWeek(0)[ti].chips||[];return todayChips.map((chip,i)=>`
         <div class="flex items-center gap-10 mb-8">
           <input type="checkbox" ${state.chipDone[ti+'-'+i]?'checked':''} onchange="toggleChip(${ti},${i},this.checked)">
           <div class="plan-chip" style="background:${chip.color};flex:1">
@@ -860,18 +846,16 @@ function renderPlanner(){
   const offset = state.planWeekOffset || 0;
   const plan = loadPlanForWeek(offset);
   state.planData = plan;
-  const todayIdx = (new Date().getDay()+6)%7;
+  const todayIdx = todayIndex();
   const isCurrentWeek = offset === 0;
 
   // Week label
-  const now = new Date();
-  const monday = new Date(now);
-  monday.setDate(now.getDate() - ((now.getDay()+6)%7) + offset*7);
+  const monday = mondayOf(offset);
   const sunday = new Date(monday); sunday.setDate(monday.getDate()+6);
   const weekLabel = monday.toLocaleDateString('en-GB',{day:'numeric',month:'short'}) + ' – ' + sunday.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
 
   return `
-  <div class="flex items-center justify-between mb-16">
+  <div class="flex items-center justify-between mb-16" style="flex-wrap:wrap;gap:12px">
     <div class="flex items-center gap-12">
       <div>
         <label class="form-label">Exam date</label>
@@ -1003,9 +987,9 @@ function renderFlashcards(){
     <span style="color:#D0D5DE">·</span>
     <span><strong style="color:var(--t1)">${_fcUpcoming}</strong> upcoming</span>
     ${state.module!=='ALL'?`<span style="color:#D0D5DE">·</span><span style="font-size:11px;opacity:.8">${state.module} only</span>`:''}
-    <span style="margin-left:auto;display:flex;align-items:center;gap:6px" title="Cards per session before the review round — changing restarts this session">
+    <span style="margin-left:auto;display:flex;align-items:center;gap:6px" title="Cards per session before the review round — changing keeps your place">
       <span style="font-size:11px;opacity:.85">Session</span>
-      <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="adjustSessionSize(-5)" aria-label="Fewer cards per session">−</button>
+      <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="adjustSessionSize(-5)" aria-label="Fewer cards per session"${fcSessionCap()<=5?' disabled title="Minimum 5 cards per session"':''}>−</button>
       <strong style="min-width:22px;text-align:center;color:var(--t1)" aria-live="polite">${fcSessionCap()}</strong>
       <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="adjustSessionSize(5)" aria-label="More cards per session">+</button>
     </span>
@@ -1028,9 +1012,8 @@ function renderFlashcards(){
     </div>
     ${!state.fcFlipped
       ?`<div class="fc-q">${renderMd(card.q,!card.ai,'lines')}</div><div class="fc-flip-hint">Click to reveal answer</div>`
-      :`<span style="font-size:13px;font-weight:600;color:var(--t2);display:block;margin-bottom:10px">Answer</span>
-        <div class="fc-q mb-12" style="font-size:15px;color:var(--t2)">${renderMd(card.q,!card.ai,'lines')}</div>
-        <div style="width:48px;height:3px;border-radius:2px;background:${card.color}55;margin:14px 0"></div>
+      :`<span style="font-size:13px;font-weight:600;color:var(--t2);display:block;margin-bottom:12px">Answer</span>
+        <div style="width:48px;height:3px;border-radius:2px;background:${card.color}55;margin:0 0 14px"></div>
         <div class="fc-a">${renderMd(card.a,!card.ai,'bullets')}</div>`
     }
   </div>
@@ -1062,7 +1045,7 @@ function renderFCComplete(total){
     </div>
     <div style="display:flex;align-items:center;justify-content:center;gap:6px;margin-bottom:20px" title="Cards per session">
       <span style="font-size:12px;color:var(--t2)">Cards per session</span>
-      <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="adjustSessionSize(-5)" aria-label="Fewer cards per session">−</button>
+      <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="adjustSessionSize(-5)" aria-label="Fewer cards per session"${fcSessionCap()<=5?' disabled title="Minimum 5 cards per session"':''}>−</button>
       <strong style="min-width:22px;text-align:center" aria-live="polite">${cap}</strong>
       <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="adjustSessionSize(5)" aria-label="More cards per session">+</button>
     </div>
@@ -1183,30 +1166,6 @@ function renderProgress(){
 function subMastery(id){
   const s=subStats(id);
   return s.seen<1?0:Math.round(s.good/s.seen*100);
-}
-
-// Coverage = % of a sub-topic's cards that have been studied at least once
-function subCoverage(id){
-  const cards=CARDS_BY_SUB[id]||[];
-  if(!cards.length) return 0;
-  const seen=cards.filter(c=>{const m=mastery[cardKey(c)];return m&&m.seen>0;}).length;
-  return Math.round(seen/cards.length*100);
-}
-
-function topicCoverage(topic){
-  if(!topic.subs.length) return 0;
-  return Math.round(topic.subs.reduce((a,s)=>a+subCoverage(s.id),0)/topic.subs.length);
-}
-
-function topicMastery(topic){
-  if(!topic.subs.length) return 0;
-  return Math.round(topic.subs.reduce((a,s)=>a+subMastery(s.id),0)/topic.subs.length);
-}
-
-function avgMastery(course){
-  const totalW=course.topics.reduce((a,t)=>a+t.w,0);
-  if(!totalW) return 0;
-  return Math.round(course.topics.reduce((a,t)=>a+topicMastery(t)*t.w,0)/totalW);
 }
 
 // ========================
@@ -1354,7 +1313,6 @@ window.confirmAdd=function(dayIndex){
     type:typeMap[state.addType]||null,
   });
   savePlanForWeek(plan, state.planWeekOffset||0);
-  savePlan(plan);
   state.addingTo=null;
   render();
 };
@@ -1364,7 +1322,6 @@ window.removeChip=function(dayIndex,chipIndex){
   if(!plan)return;
   plan[dayIndex].chips.splice(chipIndex,1);
   savePlanForWeek(plan, state.planWeekOffset||0);
-  savePlan(plan);
   render();
 };
 
@@ -1404,16 +1361,19 @@ window.adjustGoalTo=function(n){
 };
 
 // Cards per flashcard session (before the weak-card review round). Defaults to
-// the daily goal; once the user sets it, it sticks. Changing it restarts the
-// current session so the new cap takes effect immediately.
+// the daily goal; once the user sets it, it sticks. Minimum 5.
 window.adjustSessionSize=function(delta){
   state.fcSessionSize=Math.max(5,fcSessionCap()+delta);
   saveExamDate();
-  // Restart only when actively mid-session so the new cap takes effect; on the
-  // completion screen just re-render so "Continue — next N" reflects the change.
-  const midSession=state.view==='flashcards'&&state.fcDeck&&state.fcIndex<state.fcDeck.length;
-  if(midSession)resetFC();
-  else render();
+  // Re-slice the active deck to the new cap *in place* so the student keeps their
+  // position instead of being bounced back to "card 1 of N". Skipped during the
+  // weak-card review round (its deck isn't a pool slice) and on the completion
+  // screen — there a plain re-render just refreshes the "Continue — next N" count.
+  const midSession=state.view==='flashcards'&&!state.fcReviewRound&&state.fcDeck&&state.fcIndex<state.fcDeck.length;
+  if(midSession&&state.fcPool&&state.fcPool.length){
+    state.fcDeck=state.fcPool.slice(0,fcSessionCap());
+  }
+  render();
 };
 
 window.toggleChip=function(dayIndex,chipIndex,val){
@@ -1646,7 +1606,7 @@ window.triggerImport = function() {
         const data = JSON.parse(ev.target.result);
         if (data.mastery) { mastery = data.mastery; saveMastery(); }
         if (data.pool) { pool = data.pool; savePool(); }
-        if (data.planData) { state.planData = data.planData; savePlan(state.planData); }
+        if (data.planData) { state.planData = data.planData; savePlanForWeek(state.planData, 0); }
         if (data.studyStats) { studyStats = data.studyStats; saveStudyStats(); }
         if (data.examDate) { state.examDate = data.examDate; saveExamDate(); }
         if (typeof data.dailyGoal === 'number') { state.dailyGoal = data.dailyGoal; saveExamDate(); }
@@ -1740,7 +1700,6 @@ window.autoSuggestPlan = function() {
   })).sort((a,b) => a.pct - b.pct);
 
   const plan = loadPlanForWeek(state.planWeekOffset || 0);
-  const days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
   // Assign flashcard sessions: rotate through weakest 3 modules, skip Sunday
   const priorities = modMastery.slice(0, 3);
   let qi = 0;
@@ -1800,23 +1759,17 @@ function renderOverdueAlerts() {
 // PLANNER WEEK NAVIGATION
 // ========================
 function weekKey(offset) {
-  const now = new Date();
-  const monday = new Date(now);
-  monday.setDate(now.getDate() - ((now.getDay()+6)%7) + offset*7);
-  monday.setHours(0,0,0,0);
-  return monday.toISOString().slice(0,10);
+  return mondayOf(offset).toISOString().slice(0,10);
 }
 
 function loadPlanForWeek(offset) {
   const key = 'tabula_plan_v2_' + weekKey(offset);
+  const monday = mondayOf(offset);
   try {
     const s = localStorage.getItem(key);
     if (s) {
       const plan = JSON.parse(s);
       // Always refresh date numbers to match the actual week
-      const now = new Date();
-      const monday = new Date(now);
-      monday.setDate(now.getDate() - ((now.getDay()+6)%7) + offset*7);
       plan.forEach((day, i) => {
         const d = new Date(monday);
         d.setDate(monday.getDate() + i);
@@ -1827,9 +1780,6 @@ function loadPlanForWeek(offset) {
     }
   } catch(e) {}
   // Build default plan for this week
-  const now = new Date();
-  const monday = new Date(now);
-  monday.setDate(now.getDate() - ((now.getDay()+6)%7) + offset*7);
   const days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
   const defaultChips = [
     [{label:'CB1 · Flashcards',color:'#6B5DD3',modId:'CB1',type:'flashcards'}],
