@@ -22,6 +22,7 @@ let state = {
   view:'home',
   module:'ALL',
   fcIndex:0, fcFlipped:false, fcDeck:[], fcPool:[], fcWeakQueue:[], fcReviewRound:false, fcTotalReviewed:0, fcSessionSize:null, fcUndo:null,
+  fcStarted:false, fcBrowse:false, fcBrowseFilter:'all', fcCounts:{due:0,fresh:0,later:0},
   planEdit:false, planData:null, examDate:'2026-09-22', dailyGoal:45,
   addingTo:null, addMod:'CM1', addType:'Flashcards', chipDone:{},
   expandedTopics:{},
@@ -76,6 +77,18 @@ function saveMastery(){localStorage.setItem('tabula_mastery_v1',JSON.stringify(m
 // that card. Subtopic-level figures (mastery %, coverage, weak/overdue areas)
 // are aggregated back up from the constituent cards via subStats().
 const CARDS_BY_SUB=(()=>{const m={};for(const c of CARDS){(m[c.sub]||(m[c.sub]=[])).push(c);}return m;})();
+// Subtopic id → {num, name, topic, exam} lookup, so a card can show exactly which
+// syllabus subtopic it came from (card.sub is just the id, e.g. 'int-force').
+const SUB_BY_ID=(()=>{
+  const m={};
+  (typeof SYLLABUS!=='undefined'?SYLLABUS:[]).forEach(course=>{
+    const exam=examOf(course.code);
+    course.topics.forEach(topic=>{
+      topic.subs.forEach(s=>{ m[s.id]={num:s.num,name:s.name,topic:topic.name,exam}; });
+    });
+  });
+  return m;
+})();
 function cardKey(c){
   const s=c.module+'|'+c.sub+'|'+c.q;         // content hash → stable across reordering
   let h=5381;for(let i=0;i<s.length;i++)h=((h<<5)+h+s.charCodeAt(i))|0;
@@ -111,18 +124,13 @@ function recordCardRating(key, rating){
   m.lastSeen=new Date().toDateString();
   // SM-2 interval update
   const r=rating.toLowerCase();
-  if(r==='again'){
-    m.interval=1;
-    m.easeFactor=Math.max(1.3,m.easeFactor-0.2);
-  }else if(r==='hard'){
-    m.interval=Math.max(1,Math.round(m.interval*1.2));
-    m.easeFactor=Math.max(1.3,m.easeFactor-0.15);
-  }else if(r==='good'){
-    m.interval=Math.round(m.interval*m.easeFactor);
-  }else if(r==='easy'){
-    m.interval=Math.round(m.interval*m.easeFactor*1.3);
-    m.easeFactor=Math.min(2.5,m.easeFactor+0.1);
-  }
+  m.lastRating=r; // remembered so the card browser can show what you last labelled it
+  // Interval first (using the current ease, so it matches the button preview),
+  // then nudge the ease factor for future reviews.
+  m.interval=nextInterval(m.interval,m.easeFactor,r);
+  if(r==='again')      m.easeFactor=Math.max(1.3,m.easeFactor-0.2);
+  else if(r==='hard')  m.easeFactor=Math.max(1.3,m.easeFactor-0.15);
+  else if(r==='easy')  m.easeFactor=Math.min(2.5,m.easeFactor+0.1);
   const nxt=new Date();nxt.setDate(nxt.getDate()+m.interval);
   m.nextReview=nxt.toDateString();
   saveMastery();
@@ -388,8 +396,62 @@ function cardIsDue(c){
   return new Date(m.nextReview)<=t;
 }
 
+// The single source of truth for SM-2 interval progression, shared by the live
+// scheduler (recordCardRating) and the button previews so the number you see is
+// exactly the number you get. A card still "learning" (interval ≤ 1) uses fixed
+// graduating steps so all four choices are visibly distinct — otherwise rounding
+// collapses Again/Hard and Good/Easy to the same day on brand-new cards. Once a
+// card is established the usual multiplicative spacing takes over, kept strictly
+// increasing (Again < Hard < Good < Easy).
+function nextInterval(prevIv, ef, rating){
+  const iv=prevIv||1, e=ef||2.5;
+  if(rating==='again')return 1;
+  if(iv<=1) return rating==='hard'?2:rating==='good'?3:5; // learning steps (easy→5)
+  if(rating==='hard') return Math.max(iv+1, Math.round(iv*1.2));
+  if(rating==='good') return Math.max(iv+2, Math.round(iv*e));
+  return Math.max(iv+3, Math.round(iv*e*1.35)); // easy
+}
+// Days a rating would schedule for this card right now, without mutating anything.
+function previewInterval(c,rating){
+  const m=mastery[cardKey(c)];
+  return nextInterval(m&&m.interval, m&&m.easeFactor, rating);
+}
+// Human "3d" / "2wk" / "4mo" from a day count.
+function fmtInterval(d){
+  if(d<1)return '<1d';
+  if(d<7)return d+'d';
+  if(d<28)return Math.round(d/7)+'wk';
+  if(d<365)return Math.round(d/30)+'mo';
+  return (d/365).toFixed(d<730?1:0)+'y';
+}
+// When the card is next scheduled, as a short label ("new", "due", "in 5d").
+function nextReviewLabel(c){
+  const m=mastery[cardKey(c)];
+  if(!m||!(m.seen>0))return 'new';
+  if(cardIsDue(c))return 'due';
+  const t=new Date();t.setHours(0,0,0,0);
+  const d=Math.round((new Date(m.nextReview)-t)/86400000);
+  return 'in '+fmtInterval(d);
+}
+// Coarse status bucket for the card browser. "solid" = rated well and scheduled
+// out (the ones the user means by "labelled easy … won't be asked" for a while).
+function cardStatus(c){
+  const m=mastery[cardKey(c)];
+  if(!m||!(m.seen>0))return 'new';
+  if(cardIsDue(c))return 'due';
+  return (m.lastRating==='again'||m.lastRating==='hard')?'learning':'solid';
+}
+
 // Cards in the study pool that are due for review today (drives the nav badges).
 function poolDueCount(){return CARDS.filter(c=>pool[c.sub]&&cardIsDue(c)).length;}
+
+// How many brand-new cards one session may introduce. Review-first: reviews that
+// are actually due always take priority, and new material is rationed so a big
+// unstudied pool can't bury the cards you've already started. Scales gently with
+// session size but never lets new cards fill the whole session on their own.
+function newCardCap(){
+  return Math.max(5,Math.ceil(fcSessionCap()*0.6));
+}
 
 function buildDecks(){
   let cards=CARDS;
@@ -397,29 +459,35 @@ function buildDecks(){
   else if(state.module!=='ALL') cards=cards.filter(c=>examOf(c.module)===state.module);
   cards=cards.filter(c=>pool[c.sub]);
   cards=shuffle(cards);
-  // SM-2 ordering: cards due today (nextReview ≤ today) come first, sorted most-overdue first;
-  // cards not yet due follow, sorted by soonest upcoming review date.
+  // Split the eligible cards three ways.
+  //   due   — already studied and scheduled for today or earlier (the review backlog)
+  //   fresh — never seen
+  //   later — studied, but not due until a future day (respect their spacing; don't show early)
   const todaySM=new Date();todaySM.setHours(0,0,0,0);
-  cards.sort((a,b)=>{
-    const am=mastery[cardKey(a)];const bm=mastery[cardKey(b)];
-    const aNxt=am?.nextReview?new Date(am.nextReview):new Date(0);
-    const bNxt=bm?.nextReview?new Date(bm.nextReview):new Date(0);
-    const aDue=!am?.nextReview||aNxt<=todaySM;
-    const bDue=!bm?.nextReview||bNxt<=todaySM;
-    if(aDue&&!bDue)return -1;
-    if(!aDue&&bDue)return 1;
-    if(aDue&&bDue){
-      // Adaptive: among due cards, lead with your weakest (lowest mastery) topics
-      const dm=subMastery(a.sub)-subMastery(b.sub);
-      if(dm!==0)return dm;
-    }
-    return aNxt-bNxt; // most overdue first when both due; soonest next when neither due
+  const due=[],fresh=[],later=[];
+  for(const c of cards){
+    const m=mastery[cardKey(c)];
+    if(!m||!(m.seen>0)) fresh.push(c);
+    else if(!m.nextReview||new Date(m.nextReview)<=todaySM) due.push(c);
+    else later.push(c);
+  }
+  // Review-first: clear the due backlog before any new material. Within due, lead
+  // with the most-overdue, then your weakest subtopics. New cards start in your
+  // weakest areas too. "later" cards are kept only for counters/browsing.
+  due.sort((a,b)=>{
+    const an=new Date(mastery[cardKey(a)].nextReview||0), bn=new Date(mastery[cardKey(b)].nextReview||0);
+    if(+an!==+bn)return an-bn;
+    return subMastery(a.sub)-subMastery(b.sub);
   });
-  // Keep the full eligible list for the pool counters, then cap the active deck
-  // to the session size so the user only reviews as many as they chose before
-  // the review round kicks in.
-  state.fcPool=cards;
-  state.fcDeck=cards.slice(0,fcSessionCap());
+  fresh.sort((a,b)=>subMastery(a.sub)-subMastery(b.sub));
+  later.sort((a,b)=>new Date(mastery[cardKey(a)].nextReview||0)-new Date(mastery[cardKey(b)].nextReview||0));
+  state.fcCounts={due:due.length,fresh:fresh.length,later:later.length};
+  state.fcPool=[...due,...fresh,...later]; // ordered full list — drives counters and the browser
+  // Active deck: due reviews first, then top up with a rationed slice of new cards.
+  const cap=fcSessionCap();
+  const deck=due.slice(0,cap);
+  if(deck.length<cap) deck.push(...fresh.slice(0,Math.min(newCardCap(),cap-deck.length)));
+  state.fcDeck=deck;
 }
 
 function filteredCards(){
@@ -554,7 +622,7 @@ function renderTopbar(){
     </div>
     <div class="topbar-right${state.view==='flashcards'?' topbar-right-fc':''}" style="gap:12px">
       <button class="btn btn-sm btn-ghost" onclick="cycleTheme()" title="Theme: ${state.theme} (tap to change)" aria-label="Change theme, currently ${state.theme}">${themeIcon(state.theme)}</button>
-      ${state.view==='flashcards'?renderModulePills():''}
+      ${state.view==='flashcards'&&state.fcStarted&&!state.fcBrowse?renderModulePills():''}
     </div>
   </div>`;
 }
@@ -629,9 +697,16 @@ function renderReadiness(){
         <text x="30" y="34" text-anchor="middle" font-size="14" font-weight="700" style="fill:var(--t1)">${r}%</text>
       </svg>
       <div style="flex:1;min-width:180px">
-        <div style="display:flex;gap:18px;margin-bottom:8px">
+        <div style="display:flex;gap:18px;margin-bottom:8px;align-items:flex-start">
           <div><div class="text-xs text-secondary">Coverage</div><div style="font-size:15px;font-weight:700">${cov}%</div></div>
           <div><div class="text-xs text-secondary">Mastery</div><div style="font-size:15px;font-weight:700">${mast}%</div></div>
+          <details class="readiness-help"><summary aria-label="What do coverage and mastery mean?">What's this?</summary>
+            <div class="readiness-help-body">
+              <p><b>Coverage</b> — of the cards in your study pool, the share you've seen at least once. It's how much of your material you've <i>started</i>.</p>
+              <p><b>Mastery</b> — of the cards you've reviewed, how often you actually knew them (rated Good or Easy). It's your <i>recall accuracy</i>.</p>
+              <p><b>Readiness</b> blends the two (40% coverage + 60% mastery) — have you seen it, and do you know it.</p>
+            </div>
+          </details>
         </div>
         ${lapsed
           ?`<div style="font-size:12.5px;color:#C94040;font-weight:600">⚠ Your exam date has passed — update it so your pacing makes sense again.</div>
@@ -659,7 +734,7 @@ function renderNudges(){
     out+=`<div class="card mb-16" style="border:1px solid var(--border);background:var(--tint-amber);display:flex;align-items:center;gap:12px">
       <span style="font-size:22px">👋</span>
       <div style="flex:1"><div style="font-size:13.5px;font-weight:600">Welcome back — it's been ${dsince} days</div><div style="font-size:12px;color:var(--t2)">A quick session keeps your memory and your streak alive.</div></div>
-      <button class="btn btn-primary btn-sm" onclick="go('flashcards')">Study now</button>
+      <button class="btn btn-primary btn-sm" onclick="startFC()">Study now</button>
     </div>`;
   }
   if(daysSinceBackup()>=14){
@@ -947,31 +1022,38 @@ function renderAddModal(){
 // FLASHCARDS
 // ========================
 function renderFlashcards(){
-  const cards=filteredCards();
-  // Counters. "Left" is driven off session position so it ticks down on every
-  // single card; "due today"/"upcoming" are computed live from the whole pool
-  // (nextReview is per-subtopic, so these move in steps as subtopics schedule).
-  const pool=(state.fcPool&&state.fcPool.length)?state.fcPool:cards;
-  const _fcDueToday=pool.filter(cardIsDue).length;
-  const _fcUpcoming=pool.length-_fcDueToday;
-  if(cards.length===0){
-    return `<div class="card" style="text-align:center;padding:60px 40px">
-      <div style="font-size:32px;margin-bottom:12px">🃏</div>
-      <div style="font-size:16px;font-weight:600;margin-bottom:8px">No cards available</div>
-      <div class="text-sm text-secondary mb-16">Check your study pool in Progress, or select a different module.</div>
-      <button class="btn btn-primary" onclick="go('progress')">Manage study pool</button>
-    </div>`;
-  }
-  const idx=Math.min(state.fcIndex,cards.length-1);
+  if(state.fcBrowse) return renderCardBrowser();
+  if(!state.fcStarted) return renderFCStart();
 
-  if(state.fcIndex>=cards.length){
-    return renderFCComplete(cards.length);
+  const cards=filteredCards();
+  // Deck empty while a session is "running" means one of two things: the current
+  // exam/pool has no cards at all, or every due + new card is done and only
+  // future-scheduled cards remain (all caught up for today).
+  if(cards.length===0){
+    const eligible=CARDS.filter(c=>pool[c.sub]&&(state.module==='ALL'||examOf(c.module)===state.module));
+    if(eligible.length===0){
+      return `<div class="card" style="text-align:center;padding:60px 40px">
+        <div style="font-size:32px;margin-bottom:12px">🃏</div>
+        <div style="font-size:16px;font-weight:600;margin-bottom:8px">No cards in this selection</div>
+        <div class="text-sm text-secondary mb-16">Tick some topics in Progress, or choose a different exam.</div>
+        <div class="flex gap-8" style="justify-content:center;flex-wrap:wrap">
+          <button class="btn btn-ghost" onclick="exitFC()">Change exam</button>
+          <button class="btn btn-primary" onclick="go('progress')">Manage study pool</button>
+        </div>
+      </div>`;
+    }
+    return renderCaughtUp();
   }
+
+  const idx=Math.min(state.fcIndex,cards.length-1);
+  if(state.fcIndex>=cards.length) return renderFCComplete(cards.length);
 
   const card=cards[idx];
+  const sub=SUB_BY_ID[card.sub];
   const circ=163.4;
   const prog=Math.round((idx/cards.length)*circ*10)/10;
   const _fcLeft=Math.max(0,cards.length-idx); // remaining in this session — ticks every card
+  const cts=state.fcCounts||{due:0,fresh:0,later:0};
 
   return `
   ${state.fcReviewRound?`<div style="background:var(--tint-amber);border:1px solid #F0C080;border-radius:10px;padding:10px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px">
@@ -981,11 +1063,11 @@ function renderFlashcards(){
       <div style="font-size:12px;color:var(--t2)">${cards.length} card${cards.length!==1?'s':''} to retry</div>
     </div>
   </div>`:`<div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;padding:8px 14px;background:var(--s2);border-radius:8px;margin-bottom:14px;font-size:12.5px;color:var(--t2)">
-    <span><strong style="color:#3D6FD1">${_fcLeft}</strong> left</span>
+    <span><strong style="color:#3D6FD1">${_fcLeft}</strong> left this session</span>
     <span style="color:#D0D5DE">·</span>
-    <span><strong style="color:var(--t1)">${_fcDueToday}</strong> due today</span>
+    <span title="Cards you've studied before that are due for review"><strong style="color:var(--t1)">${cts.due}</strong> reviews due</span>
     <span style="color:#D0D5DE">·</span>
-    <span><strong style="color:var(--t1)">${_fcUpcoming}</strong> upcoming</span>
+    <span title="Cards you haven't seen yet"><strong style="color:var(--t1)">${cts.fresh}</strong> new</span>
     ${state.module!=='ALL'?`<span style="color:#D0D5DE">·</span><span style="font-size:11px;opacity:.8">${state.module} only</span>`:''}
     <span style="margin-left:auto;display:flex;align-items:center;gap:6px" title="Cards per session before the review round — changing keeps your place">
       <span style="font-size:11px;opacity:.85">Session</span>
@@ -1003,12 +1085,14 @@ function renderFlashcards(){
       </svg>
       ${state.fcUndo?`<button class="btn btn-ghost btn-sm" onclick="undoRating()" title="Undo your last rating">↩ Undo</button>`:''}
       <button class="btn btn-ghost btn-sm" onclick="resetFC()">Restart</button>
+      <button class="btn btn-ghost btn-sm" onclick="exitFC()" title="Back to session setup">Exit</button>
     </div>
   </div>
 
   <div class="fc-card mb-20" style="border-top:4px solid ${card.color}" role="button" tabindex="0" aria-label="Flashcard — activate to ${state.fcFlipped?'hide':'reveal'} answer" onclick="flipCard()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();flipCard()}">
-    <div style="margin-bottom:12px">
-      <span class="badge" style="background:${card.color}18;color:${card.color}">${card.topic}</span>
+    <div style="margin-bottom:14px">
+      <span class="badge" style="background:${card.color}18;color:${card.color}">${examOf(card.module)} · ${card.topic}</span>
+      ${sub?`<div class="fc-subtopic"><span style="font-weight:700;color:var(--t1)">${sub.num}</span> ${escHtml(sub.name)}</div>`:''}
     </div>
     ${!state.fcFlipped
       ?`<div class="fc-q">${renderMd(card.q,!card.ai,'lines')}</div><div class="fc-flip-hint">Click to reveal answer</div>`
@@ -1020,16 +1104,33 @@ function renderFlashcards(){
 
   ${state.fcFlipped?`
   <div class="rating-row">
-    <button class="rating-btn rating-again" onclick="rateCard('again')">Again</button>
-    <button class="rating-btn rating-hard" onclick="rateCard('hard')">Hard</button>
-    <button class="rating-btn rating-good" onclick="rateCard('good')">Good</button>
-    <button class="rating-btn rating-easy" onclick="rateCard('easy')">Easy</button>
+    <button class="rating-btn rating-again" onclick="rateCard('again')" title="You forgot it — the card resets and comes back very soon"><span class="rk">Again</span><span class="ri">${fmtInterval(previewInterval(card,'again'))}</span></button>
+    <button class="rating-btn rating-hard" onclick="rateCard('hard')" title="You recalled it but it was a real struggle — comes back soon"><span class="rk">Hard</span><span class="ri">${fmtInterval(previewInterval(card,'hard'))}</span></button>
+    <button class="rating-btn rating-good" onclick="rateCard('good')" title="You recalled it with some effort — normal spacing"><span class="rk">Good</span><span class="ri">${fmtInterval(previewInterval(card,'good'))}</span></button>
+    <button class="rating-btn rating-easy" onclick="rateCard('easy')" title="It was effortless — waits the longest before you see it again"><span class="rk">Easy</span><span class="ri">${fmtInterval(previewInterval(card,'easy'))}</span></button>
   </div>
+  <div class="rating-legend">Numbers show how long until this card returns. Rate honestly — <b>Easy</b> pushes it furthest out, <b>Again</b> brings it straight back.</div>
   <div class="kb-hint"><span class="kb-key">1</span> Again &nbsp; <span class="kb-key">2</span> Hard &nbsp; <span class="kb-key">3</span> Good &nbsp; <span class="kb-key">4</span> Easy</div>
   <div class="swipe-hint">Swipe card&nbsp; → <b>Good</b> &nbsp;·&nbsp; ← <b>Again</b></div>`:`
   <div style="text-align:center" class="text-sm text-secondary">Rate yourself after flipping</div>
   <div class="kb-hint"><span class="kb-key">Space</span> or <span class="kb-key">→</span> to flip</div>
   <div class="swipe-hint">Tap or swipe the card to flip</div>`}`;
+}
+
+// Shown when a session's deck empties because everything due/new is done and only
+// future-scheduled cards remain — the healthy end-state of review-first pacing.
+function renderCaughtUp(){
+  const later=(state.fcCounts&&state.fcCounts.later)||0;
+  return `<div class="card" style="text-align:center;padding:56px 40px;max-width:500px;margin:0 auto">
+    <div style="font-size:40px;margin-bottom:16px">🎯</div>
+    <div style="font-size:20px;font-weight:700;margin-bottom:8px">All caught up${state.module!=='ALL'?' in '+state.module:''}</div>
+    <div class="text-sm text-secondary mb-8">No cards are due right now and you've seen all the new ones in this selection.</div>
+    ${later>0?`<div class="text-sm mb-24" style="color:#2E9C8E;font-weight:600">${later} card${later!==1?'s':''} scheduled for later — spaced repetition is doing its job.</div>`:'<div class="mb-16"></div>'}
+    <div class="flex gap-12" style="justify-content:center;flex-wrap:wrap">
+      <button class="btn btn-primary" onclick="openCardBrowser()">Browse all cards</button>
+      <button class="btn btn-ghost" onclick="exitFC()">Study a different exam</button>
+    </div>
+  </div>`;
 }
 
 function renderFCComplete(total){
@@ -1050,10 +1151,153 @@ function renderFCComplete(total){
       <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="adjustSessionSize(5)" aria-label="More cards per session">+</button>
     </div>
     <div class="flex gap-12" style="justify-content:center;flex-wrap:wrap">
-      ${dueLeft>0?`<button class="btn btn-primary" onclick="resetFC()">Continue — next ${nextBatch}</button>`:`<button class="btn btn-primary" onclick="go('home')">Back to dashboard</button>`}
-      <button class="btn btn-ghost" onclick="go('progress')">Review topics</button>
+      ${dueLeft>0?`<button class="btn btn-primary" onclick="resetFC()">Continue — next ${nextBatch}</button>`:`<button class="btn btn-primary" onclick="exitFC('home')">Back to dashboard</button>`}
+      <button class="btn btn-ghost" onclick="openCardBrowser()">Browse cards</button>
+      <button class="btn btn-ghost" onclick="exitFC()">Setup</button>
     </div>
   </div>`;
+}
+
+// ========================
+// FLASHCARDS — START SCREEN
+// ========================
+// Per-exam due / new / total counts for the pooled cards, so the picker can show
+// what's waiting before you commit to a session.
+function examCardStats(examId){
+  const cs=CARDS.filter(c=>pool[c.sub]&&(examId==='ALL'||examOf(c.module)===examId));
+  let due=0,fresh=0;
+  for(const c of cs){
+    const m=mastery[cardKey(c)];
+    if(!m||!(m.seen>0))fresh++;
+    else if(cardIsDue(c))due++;
+  }
+  return {total:cs.length,due,fresh};
+}
+
+// The flashcards landing page: choose an exam, see what's waiting, set session
+// size, then start. Also the doorway to the card browser. Shown whenever no
+// session is running, so switching tabs and coming back lands here (never mid-deck).
+function renderFCStart(){
+  const pills=['ALL',...MODULES.map(m=>m.id)];
+  const cur=examCardStats(state.module);
+  const startable=cur.due+cur.fresh>0;
+  return `
+  <div class="fc-start">
+    <div class="card mb-16">
+      <div style="font-size:15px;font-weight:700;margin-bottom:4px">What do you want to study?</div>
+      <div class="text-sm text-secondary mb-16">Pick an exam — sessions lead with your due reviews, then bring in new cards.</div>
+      <div class="fc-exam-grid">
+        ${pills.map(p=>{
+          const mod=MODULES.find(m=>m.id===p);
+          const color=mod?mod.color:'#616B7A';
+          const label=p==='ALL'?'All exams':p;
+          const st=examCardStats(p);
+          const active=state.module===p;
+          return `<button class="fc-exam${active?' fc-exam-active':''}" style="--ec:${color}" aria-pressed="${active}" onclick="setModule('${p}')">
+            <div class="fc-exam-name">${label}</div>
+            <div class="fc-exam-sub">${mod?mod.name:'CM1 · CS1 · CB1 together'}</div>
+            <div class="fc-exam-counts">
+              <span class="fc-chip-due" title="Reviews due">${st.due} due</span>
+              <span class="fc-chip-new" title="New cards">${st.fresh} new</span>
+            </div>
+          </button>`;
+        }).join('')}
+      </div>
+    </div>
+
+    <div class="card mb-16">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:14px;font-weight:600">${state.module==='ALL'?'All exams':state.module} · this session</div>
+          <div class="text-sm text-secondary">${cur.due} review${cur.due!==1?'s':''} due · ${cur.fresh} new card${cur.fresh!==1?'s':''} available</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px" title="How many cards before the difficult-card review round">
+          <span style="font-size:12px;color:var(--t2)">Cards / session</span>
+          <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="adjustSessionSize(-5)" aria-label="Fewer cards"${fcSessionCap()<=5?' disabled':''}>−</button>
+          <strong style="min-width:22px;text-align:center" aria-live="polite">${fcSessionCap()}</strong>
+          <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="adjustSessionSize(5)" aria-label="More cards">+</button>
+        </div>
+      </div>
+      <div class="flex gap-12" style="margin-top:16px;flex-wrap:wrap">
+        <button class="btn btn-primary" style="flex:1;min-width:150px"${startable?'':' disabled title="Nothing due or new — you\'re caught up"'} onclick="startFC()">${startable?'Start session':'All caught up'}</button>
+        <button class="btn btn-ghost" onclick="openCardBrowser()">Browse cards →</button>
+      </div>
+      ${!startable&&cur.total>0?`<div class="text-sm mb-8" style="color:#2E9C8E;font-weight:600;margin-top:12px;text-align:center">🎯 Nothing due right now — great time to browse or tick new topics.</div>`:''}
+      ${cur.total===0?`<div class="text-sm text-secondary" style="margin-top:12px;text-align:center">No cards in this selection yet — <a href="#" onclick="go('progress');return false" style="color:#3D6FD1;font-weight:600">tick some topics in Progress</a>.</div>`:''}
+    </div>
+
+    <div class="card">
+      <div style="font-size:13px;font-weight:600;margin-bottom:10px">How rating works</div>
+      <div class="fc-rate-legend">
+        <div><span class="lg-dot" style="background:#C94040"></span><b>Again</b> — forgot it. Resets; comes back tomorrow.</div>
+        <div><span class="lg-dot" style="background:#C97B30"></span><b>Hard</b> — a struggle. Comes back soon.</div>
+        <div><span class="lg-dot" style="background:#2E9C8E"></span><b>Good</b> — recalled it. Normal spacing.</div>
+        <div><span class="lg-dot" style="background:#3D6FD1"></span><b>Easy</b> — effortless. Waits the longest.</div>
+      </div>
+      <div class="text-sm text-secondary" style="margin-top:10px">Each session shows the exact number of days next to every button, so you always know what your choice does.</div>
+    </div>
+  </div>`;
+}
+
+// ========================
+// FLASHCARDS — CARD BROWSER
+// ========================
+// Lets the student SEE every card's state — new, due, still being learned
+// (last rated Again/Hard), or solid & scheduled out (last rated Good/Easy, "won't
+// be asked for a while"). Filterable, respects the current exam + study pool.
+function renderCardBrowser(){
+  const cards=CARDS.filter(c=>pool[c.sub]&&(state.module==='ALL'||examOf(c.module)===state.module));
+  const buckets={new:[],due:[],learning:[],solid:[]};
+  cards.forEach(c=>buckets[cardStatus(c)].push(c));
+  const meta={
+    all:{label:'All',color:'#616B7A',n:cards.length},
+    due:{label:'Due now',color:'#C94040',n:buckets.due.length},
+    learning:{label:'Still learning',color:'#C97B30',n:buckets.learning.length},
+    solid:{label:'Solid — waiting',color:'#2E9C8E',n:buckets.solid.length},
+    new:{label:'New',color:'#3D6FD1',n:buckets.new.length},
+  };
+  const filter=state.fcBrowseFilter||'all';
+  let list=filter==='all'?cards:buckets[filter]||[];
+  // Order within the view: due → learning → new → solid, then by subtopic.
+  const rank={due:0,learning:1,new:2,solid:3};
+  list=list.slice().sort((a,b)=>{
+    const r=rank[cardStatus(a)]-rank[cardStatus(b)];
+    if(r!==0)return r;
+    return (a.sub<b.sub?-1:a.sub>b.sub?1:0);
+  });
+  const statusChip=c=>{
+    const s=cardStatus(c);
+    const m=mastery[cardKey(c)];
+    const col=s==='new'?'#3D6FD1':s==='due'?'#C94040':s==='learning'?'#C97B30':'#2E9C8E';
+    const lastTxt=m&&m.lastRating?m.lastRating.charAt(0).toUpperCase()+m.lastRating.slice(1):'';
+    const when=nextReviewLabel(c);
+    return `<span class="cb-status" style="color:${col};background:${col}14">${lastTxt?lastTxt+' · ':''}${when}</span>`;
+  };
+  const rows=list.slice(0,400).map(c=>{
+    const sub=SUB_BY_ID[c.sub];
+    return `<div class="cb-row">
+      <span class="cb-dot" style="background:${c.color}"></span>
+      <div class="cb-main">
+        <div class="cb-q">${escHtml((c.q||'').replace(/\$[^$]*\$/g,'…').slice(0,120))}${(c.q||'').length>120?'…':''}</div>
+        <div class="cb-sub">${examOf(c.module)}${sub?' · '+sub.num+' '+escHtml(sub.name):' · '+escHtml(c.topic||'')}</div>
+      </div>
+      ${statusChip(c)}
+    </div>`;
+  }).join('');
+  return `
+  <div class="flex items-center justify-between mb-16" style="gap:10px;flex-wrap:wrap">
+    <button class="btn btn-ghost btn-sm" onclick="closeCardBrowser()">← Back</button>
+    <div class="text-sm text-secondary">${state.module==='ALL'?'All exams':state.module} · ${cards.length} card${cards.length!==1?'s':''} in your pool</div>
+  </div>
+  <div class="cb-filters">
+    ${['all','due','learning','solid','new'].map(k=>`
+      <button class="cb-filter${filter===k?' cb-filter-active':''}" style="--fc:${meta[k].color}" onclick="setBrowseFilter('${k}')">${meta[k].label} <span class="cb-count">${meta[k].n}</span></button>
+    `).join('')}
+  </div>
+  <div class="cb-legend text-sm text-secondary">
+    <b>Solid — waiting</b> are cards you rated Good/Easy; spaced repetition is deliberately holding them back until the date shown, so they won't be asked before then.
+  </div>
+  ${list.length===0?`<div class="card" style="text-align:center;padding:40px">No cards in this category.</div>`:`<div class="cb-list">${rows}</div>${list.length>400?`<div class="text-sm text-secondary" style="text-align:center;margin-top:12px">Showing first 400 of ${list.length}.</div>`:''}`}`;
 }
 
 // ========================
@@ -1173,14 +1417,43 @@ function subMastery(id){
 // ========================
 window.go=function(view){
   state.view=view;
-  if(view==='flashcards'){state.fcIndex=0;state.fcFlipped=false;state.fcWeakQueue=[];state.fcReviewRound=false;state.fcTotalReviewed=0;buildDecks();}
+  // Flashcards: don't reset here. Landing on the tab resumes an in-progress
+  // session (the whole point of the fix); the start screen shows only when no
+  // session is running. Explicit "study now" actions call startFC() instead.
   render();
 };
 
+// Begin (or restart) a flashcard session for the current exam filter. This is the
+// single entry point for actually studying — the Start button, planner chips,
+// weak-area drills, the dashboard shortcut and "Continue" all route through it.
+window.startFC=function(){
+  state.view='flashcards';
+  state.fcStarted=true; state.fcBrowse=false;
+  state.fcIndex=0; state.fcFlipped=false; state.fcWeakQueue=[]; state.fcReviewRound=false;
+  state.fcTotalReviewed=0; state.fcUndo=null;
+  buildDecks();
+  render();
+};
+
+// Leave the current session and return to the start screen (or another view).
+window.exitFC=function(dest){
+  state.fcStarted=false; state.fcBrowse=false;
+  state.view=dest||'flashcards';
+  render();
+};
+
+window.openCardBrowser=function(){ state.fcBrowse=true; render(); };
+window.closeCardBrowser=function(){ state.fcBrowse=false; render(); };
+window.setBrowseFilter=function(f){ state.fcBrowseFilter=f; render(); };
+
 window.setModule=function(mod){
   state.module=mod;
-  state.fcIndex=0;state.fcFlipped=false;state.fcWeakQueue=[];state.fcReviewRound=false;
-  buildDecks();
+  // On the start screen / browser this just refilters the counts. Mid-session it
+  // restarts the deck in the newly chosen exam.
+  if(state.fcStarted&&!state.fcBrowse){
+    state.fcIndex=0;state.fcFlipped=false;state.fcWeakQueue=[];state.fcReviewRound=false;state.fcTotalReviewed=0;
+    buildDecks();
+  }
   render();
 };
 
@@ -1229,6 +1502,7 @@ window.rateCard=function(rating){
 };
 
 window.resetFC=function(){
+  state.fcStarted=true;state.fcBrowse=false;
   state.fcIndex=0;state.fcFlipped=false;state.fcWeakQueue=[];state.fcReviewRound=false;state.fcTotalReviewed=0;state.fcUndo=null;buildDecks();
   render();
 };
@@ -1383,10 +1657,9 @@ window.toggleChip=function(dayIndex,chipIndex,val){
 };
 
 window.startFromChip=function(modId,type){
-  state.module=examOf(modId)||'ALL';
   if(modId){
-    state.fcIndex=0;state.fcFlipped=false;
-    go('flashcards');
+    state.module=examOf(modId)||'ALL';
+    startFC();
   }else{
     go('home');
   }
@@ -1687,7 +1960,7 @@ window.drillSubTopic = function(subId) {
   }
   state.module = modId;
   state.drillSub = subId; // buildDecks reads this to filter
-  go('flashcards');        // calls buildDecks() → picks up drillSub
+  startFC();               // starts a session; buildDecks() picks up drillSub
   showToast(`Drilling: ${subId.replace(/-/g,' ')} (${state.fcDeck.length} card${state.fcDeck.length!==1?'s':''})`);
 };
 
@@ -1751,7 +2024,7 @@ function renderOverdueAlerts() {
         <span style="font-size:12.5px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(t.name)}</span>
         <span style="font-size:11.5px;color:#C94040;flex-shrink:0;font-weight:600">${t.days}d ago</span>
       </div>`).join('')}
-    <button class="btn btn-sm" style="background:#FEE2DC;color:#C94040;border:none;margin-top:8px" onclick="go('flashcards')">Review now →</button>
+    <button class="btn btn-sm" style="background:#FEE2DC;color:#C94040;border:none;margin-top:8px" onclick="startFC()">Review now →</button>
   </div>`;
 }
 
@@ -1810,9 +2083,10 @@ document.addEventListener('keydown', function(e) {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   // QW-4: S to start studying from Dashboard
   if (state.view === 'home' && (e.key === 's' || e.key === 'S')) {
-    e.preventDefault(); go('flashcards'); return;
+    e.preventDefault(); startFC(); return;
   }
-  if (state.view === 'flashcards') {
+  // Card shortcuts only apply while actually studying — not on the start screen or browser.
+  if (state.view === 'flashcards' && state.fcStarted && !state.fcBrowse) {
     const cards = filteredCards();
     if (state.fcIndex >= cards.length) return;
     if ((e.key === ' ' || e.key === 'ArrowRight') && !state.fcFlipped) {
